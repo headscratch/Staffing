@@ -286,15 +286,14 @@ method BuildApprovalList
          
          &recTempNEW_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
          &rNew_APRV_VW.CopyFieldsTo(&recTempNEW_APRV_VW);
-         &arrRelatedTransaction.Push(CreateArrayAny(&recCurrentRecord.CCS_TRANSACT_NBR.Value, &nPrevTranIndex, &rNew_APRV_VW));
-         <*
+         &arrRelatedTransaction.Push(CreateArrayAny(&recCurrentRecord.CCS_TRANSACT_NBR.Value, &nPrevTranIndex, &recTempNEW_APRV_VW));
+         
          If &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
             /*Just a removal*/
             &rNew_APRV_VW.LOCATION.Value = "";
             &rNew_APRV_VW.FTE.Value = 0;
             &rNew_APRV_VW.POSITION_NBR.Value = "";
          End-If;
-		 *>
       End-If;
       
       If &recCurrentRecord.CCS_STA_APPROVAL.Value = "P" Then
