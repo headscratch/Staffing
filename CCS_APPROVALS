@@ -1,0 +1,833 @@
+import CCS_STF_STA:*;
+
+
+
+class CCS_APPROVALS
+   method CCS_APPROVALS();
+   method BuildApprovalList() Returns Rowset;
+   method SetLocation(&sLOCATION As string);
+   method SetEmplid(&sEMPLID As string);
+   method SetStfPosID(&nCCS_STF_POS_ID As number);
+   method PosGetActualRow(&rApprvlRecord As Record) Returns Record;
+   method JobGetActualRow(&rApprvlRecord As Record) Returns Record;
+   method GetCurrentPosInfo(&recCurRow As Record, &recActualRow As Record) Returns Record;
+   method GetPreviousPosInfo(&recCurRow As Record) Returns Record;
+   
+   
+   property string WhereClause;
+   property string LOCATION;
+   property string EMPLID;
+   property number CCS_STF_POS_ID;
+   property array of array of any aEMPLID;
+   property array of array of any aPOSITION_NBR;
+   property array of array of any aPOSITION_INFO;
+   property array of array of any aActualEMPLIndx;
+   property array of array of any aActualEMPL;
+   property array of array aActualPOS;
+   
+end-class;
+
+method CCS_APPROVALS
+   &WhereClause = "";
+   
+   /*&aEMPLID is 2 dimension array the first element of sub-array is the EMPLID 
+	and the other elements are POSITION_NBRs associated to the EMPLID*/
+   &aEMPLID = CreateArrayRept(CreateArrayAny(), 0);
+   
+   /*&aPOSITION_NBR is 2 dimension array the first element of sub-array is the position number 
+	and the other elements are EMPLIDs related to that position number. This is an indexing array that is used to find 
+	Position info from the POSITION_INFO array*/
+   &aPOSITION_NBR = CreateArrayRept(CreateArrayAny(CreateArrayAny()), 0);
+   
+   &aPOSITION_INFO = CreateArrayRept(CreateArrayAny(CreateArrayAny()), 0);
+   &aActualPOS = CreateArrayRept(CreateArrayAny(), 0);
+   &aActualEMPL = CreateArrayRept(CreateArrayAny(CreateArrayAny()), 0);
+   &aActualEMPLIndx = CreateArrayRept(CreateArrayAny(CreateArrayAny()), 0);
+   
+   
+end-method;
+
+method BuildApprovalList
+   /+ Returns Rowset +/
+   /*Will query CCS_STF_POS and CCS_EE_JOB_STF and build a list of changes/additions that need approval*/
+   
+   /*There are three records that are primaily used
+	&rActual_APRV_VW = Values from the last approved or Completed change, failing that values from HR
+						This record is used for the left hand columns that define the change
+	&rNew_APRV_VW = Values from the current channge row that is pending, 
+						This record is used for filling in the New values for the change
+	&rPOS_Prev_APRV_VW = Values from the previous Pending change row for a position or job
+						This record is used for filling in the Current values for the change.
+						If there is no previous */
+   
+   Local Rowset &rsApprovalList;
+   Local Rowset &rsDisplayApprovals;
+   Local Row &rowTempRow;
+   
+   Local Record &rTempCCS_DERIVED_APR;
+   Local Record &rNew_APRV_VW;
+   Local Record &recPrev_APRV_VW;
+   Local Record &rActual_APRV_VW;
+   Local Record &recTemp_APRV_VW;
+   Local Record &recPrevTransaction;
+   Local Record &recCurrentRecord;
+   Local Record &recTempNEW_APRV_VW;
+   
+   
+   Local array of any &aPosSub;
+   /*Array of records, and the rowset row they are on
+	that is stored by Transaction number
+	&arrRelatedTransaction[[CCS_TRANSACT_MBR][Rowset Index][Approval Record]]*/
+   Local array of array of any &arrRelatedTransaction;
+   Local array of number &arrRowsToDelete;
+   Local number &i;
+   Local number &nArrayLength;
+   Local number &nDisplayRow;
+   Local number &nCombinedFTE;
+   Local number &nEmplCombinedFTE;
+   Local number &nPOSITION_NBRIndex;
+   Local number &nEMPLIDIndex;
+   Local number &nEMPLRCDIndex;
+   Local number &nRelTranIndex;
+   Local number &nPrevTranIndex;
+   
+   Local boolean &bExistingJobData;
+   Local boolean &bExistingPosData;
+   
+   Local datetime &dtEFFDT;
+   
+   
+   &rsApprovalList = CreateRowset(Record.CCS_STF_APRV_VW);
+   &rsDisplayApprovals = CreateRowset(Record.CCS_DERIVED_APR);
+   
+   
+   
+   
+   &arrRelatedTransaction = CreateArrayRept(CreateArrayAny(), 0);
+   &arrRowsToDelete = CreateArrayRept(0, 0);
+   
+   &rsApprovalList.Fill(&WhereClause | " ORDER BY CCS_STF_POS_ID, EFFDT");
+   
+   &aPosSub = CreateArrayAny();
+   
+   &nDisplayRow = 1;
+   
+   For &i = 1 To &rsApprovalList.RowCount
+      
+      &rTempCCS_DERIVED_APR = CreateRecord(Record.CCS_DERIVED_APR);
+      &recPrevTransaction = CreateRecord(Record.CCS_STF_APRV_VW);
+      &rNew_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
+      &recPrev_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
+      &recCurrentRecord = CreateRecord(Record.CCS_STF_APRV_VW);
+      &rActual_APRV_VW = CreateRecord(Record.CCS_DERIVED_APR);
+      /*      
+      &rNew_APRV_VW = &rsApprovalList(&i).CCS_STF_APRV_VW;
+		*/
+      &rsApprovalList(&i).CCS_STF_APRV_VW.CopyFieldsTo(&rNew_APRV_VW);
+      &rsApprovalList(&i).CCS_STF_APRV_VW.CopyFieldsTo(&recCurrentRecord);
+      
+      
+      /*  
+      If &recCurrentRecord.CCS_STA_APPROVAL.Value = "P" Then
+         WinMessage(&rNew_APRV_VW.FTE.Value | "    " | &rsApprovalList(&i).CCS_STF_APRV_VW.FTE.Value);
+      End-If;
+     */
+      /*Set the actual records for this row*/
+      If &rNew_APRV_VW.CCS_CHANGE_TYPE.Value = "Job" And
+            &rNew_APRV_VW.CCS_STA_APPROVAL.Value = "P" Then
+         
+         If &rActual_APRV_VW.EMPLID.Value <> &rNew_APRV_VW.EMPLID.Value Or
+               &rActual_APRV_VW.EMPL_RCD.Value <> &rNew_APRV_VW.EMPL_RCD.Value Then
+            &rActual_APRV_VW = %This.JobGetActualRow(&rNew_APRV_VW);
+         End-If;
+      End-If;
+      
+      If &rNew_APRV_VW.CCS_CHANGE_TYPE.Value = "Position" And
+            &rNew_APRV_VW.CCS_STA_APPROVAL.Value = "P" Then
+         If &rActual_APRV_VW.POSITION_NBR.Value <> &rNew_APRV_VW.POSITION_NBR.Value Then
+            &rActual_APRV_VW = %This.PosGetActualRow(&rNew_APRV_VW);
+         End-If;
+      End-If;
+      
+      If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value = "R" Then
+         /*See if the row has been temporarily rejected by the staffing comittee*/
+         If None(&rNew_APRV_VW.EMPLID.Value) Then
+            &rNew_APRV_VW.EMPLID.Value = 0;
+            If &rNew_APRV_VW.POSITION_NBR.Value <> &recPrev_APRV_VW.POSITION_NBR.Value Then
+               &recPrev_APRV_VW = %This.GetPreviousPosInfo(&rNew_APRV_VW);
+            End-If;
+            
+            If None(&recPrev_APRV_VW.POSITION_NBR.Value) Then
+               /*No previous row was found so we'll use the actual row*/
+               &rActual_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
+            End-If;
+         Else
+            &recPrev_APRV_VW.EMPLID.Value = &rNew_APRV_VW.EMPLID.Value;
+            
+            If &recPrev_APRV_VW.POSITION_NBR.Value <> &rNew_APRV_VW.POSITION_NBR.Value Then
+               &recPrev_APRV_VW = %This.GetPreviousPosInfo(&recPrev_APRV_VW);
+            End-If;
+         End-If;
+         
+      Else
+         
+         If None(&rNew_APRV_VW.EMPLID.Value) Then
+            &rNew_APRV_VW.EMPLID.Value = 0;
+            If &rNew_APRV_VW.POSITION_NBR.Value <> &recPrev_APRV_VW.POSITION_NBR.Value Then
+               &recPrev_APRV_VW = %This.GetPreviousPosInfo(&rNew_APRV_VW);
+            End-If;
+            
+            If None(&recPrev_APRV_VW.POSITION_NBR.Value) Then
+               /*No previous row was found so we'll use the actual row*/
+               &rActual_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
+            End-If;
+            
+         Else
+            
+            /*Populate the array of Emplids the Combined FTE For that Emplid and the positions
+			associated with that Emplid*/
+            &nEMPLIDIndex = &aEMPLID.Find(&rNew_APRV_VW.EMPLID.Value);
+            If &nEMPLIDIndex = 0 Then
+               
+               &aEMPLID.Push(CreateArrayAny(&rNew_APRV_VW.EMPLID.Value));
+               &nEMPLIDIndex = &aEMPLID.Len;
+               &aEMPLID [&nEMPLIDIndex].Push(&rNew_APRV_VW.CCS_COMBINED_FTE.Value);
+            End-If;
+            
+            &aEMPLID [&nEMPLIDIndex].Push(&rNew_APRV_VW.POSITION_NBR.Value);
+            &nArrayLength = &aEMPLID [&nEMPLIDIndex].Len;
+            <*
+            If &rNew_APRV_VW.CCS_STF_ACTION.Value = "T" Then
+               /*This is a transfer so we need to get the last Position from this EMPLID was associated with*/
+               &recPrev_APRV_VW.POSITION_NBR.Value = &aEMPLID [&nEMPLIDIndex][&nArrayLength - 1];
+               &recPrev_APRV_VW.EMPLID.Value = &rNew_APRV_VW.EMPLID.Value;
+               &recPrev_APRV_VW = %This.GetPreviousPosInfo(&recPrev_APRV_VW);
+            Else
+             *>
+            If &recPrev_APRV_VW.POSITION_NBR.Value <> &rNew_APRV_VW.POSITION_NBR.Value Then
+               &recPrev_APRV_VW = %This.GetPreviousPosInfo(&rNew_APRV_VW);
+            End-If;
+            <*
+            End-If;
+            *>
+            /*Pull out the stored Combined FTE for the Employee*/
+            If All(&rNew_APRV_VW.EMPLID.Value) Then
+               &rNew_APRV_VW.CCS_COMBINED_FTE.Value = &aEMPLID [&nEMPLIDIndex][2];
+            End-If;
+         End-If;
+         
+         &rNew_APRV_VW = %This.GetCurrentPosInfo(&rNew_APRV_VW, &rActual_APRV_VW);
+         
+         If &rNew_APRV_VW.EMPLID.Value <> 0 Then
+            /*Store the updated Combined FTE for the employee*/
+            If All(&rNew_APRV_VW.EMPLID.Value) Then
+               &aEMPLID [&nEMPLIDIndex][2] = &rNew_APRV_VW.CCS_COMBINED_FTE.Value;
+            End-If;
+         End-If;
+      End-If;
+      If None(&recPrev_APRV_VW.LOCATION.Value) Or
+            None(&recPrev_APRV_VW.POSITION_NBR.Value) Then
+         /*No previous record at all so we'll just the current actual record as the previous record*/
+         &rActual_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
+      End-If;
+      
+      
+      
+      
+      If &rNew_APRV_VW.CCS_CHANGE_TYPE.Value = "Job" And
+            &rNew_APRV_VW.CCS_STF_ACTION.Value = "P" Then /*Employee Placement*/
+         &recPrev_APRV_VW.FTE.Value = 0;
+         &recPrev_APRV_VW.LOCATION.Value = "";
+         &recPrev_APRV_VW.POSITION_NBR.Value = "";
+      End-If;
+      
+      
+      
+      /*See if another transaction with a related 
+		 transaction number has already been processed*/
+      &nRelTranIndex = &arrRelatedTransaction.Find(&recCurrentRecord.CCS_TRANSACT_NBR.Value);
+      If &nRelTranIndex > 0 Then
+         &arrRelatedTransaction [&nRelTranIndex][3].CopyFieldsTo(&recPrevTransaction);
+         If &recCurrentRecord.CCS_STF_ACTION.Value = "T" Then
+            If &recPrevTransaction.CCS_STF_ACTION.Value = "R" Then
+               &recPrevTransaction.CopyFieldsTo(&recPrev_APRV_VW);
+               &recPrevTransaction.CopyFieldsTo(&recCurrentRecord);
+               &recCurrentRecord.CCS_STF_ACTION.Value = "T";
+               /*We'll remove the previous row if it was set to be displayed*/
+               If &recPrevTransaction.CCS_STA_APPROVAL.Value = "P" Then
+                  &arrRowsToDelete.Push(&arrRelatedTransaction [&nRelTranIndex][2]);
+               End-If;
+            End-If;
+         End-If;
+         
+         
+         If &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
+            If &recPrevTransaction.CCS_STF_ACTION.Value = "T" Then
+               &recCurrentRecord.CopyFieldsTo(&recPrev_APRV_VW);
+               &recPrevTransaction.CopyFieldsTo(&recCurrentRecord);
+               &recPrevTransaction.CopyFieldsTo(&rNew_APRV_VW);
+               If &recPrevTransaction.CCS_STA_APPROVAL.Value = "P" Then
+                  &arrRowsToDelete.Push(&arrRelatedTransaction [&nRelTranIndex][2]);
+               End-If;
+            Else
+               /*Just a removal*/
+               &rNew_APRV_VW.LOCATION.Value = "";
+               &rNew_APRV_VW.FTE.Value = 0;
+               &rNew_APRV_VW.POSITION_NBR.Value = "";
+            End-If;
+         End-If;
+      Else
+         If &recCurrentRecord.CCS_STA_APPROVAL.Value = "P" Then
+            &nPrevTranIndex = &nDisplayRow;
+         Else
+            &nPrevTranIndex = - 1;
+         End-If;
+         
+         
+         &recTempNEW_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
+         &rNew_APRV_VW.CopyFieldsTo(&recTempNEW_APRV_VW);
+         &arrRelatedTransaction.Push(CreateArrayAny(&recCurrentRecord.CCS_TRANSACT_NBR.Value, &nPrevTranIndex, &rNew_APRV_VW));
+         <*
+         If &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
+            /*Just a removal*/
+            &rNew_APRV_VW.LOCATION.Value = "";
+            &rNew_APRV_VW.FTE.Value = 0;
+            &rNew_APRV_VW.POSITION_NBR.Value = "";
+         End-If;
+		 *>
+      End-If;
+      
+      If &recCurrentRecord.CCS_STA_APPROVAL.Value = "P" Then
+         
+         
+         /*Fill in the New rows of the approval request*/
+         
+         &rTempCCS_DERIVED_APR.LOCATION.Value = &rActual_APRV_VW.LOCATION.Value;
+         &rTempCCS_DERIVED_APR.POSITION_NBR.Value = &rActual_APRV_VW.POSITION_NBR.Value;
+         &rTempCCS_DERIVED_APR.EMPLID.Value = &recCurrentRecord.EMPLID.Value;
+         &rTempCCS_DERIVED_APR.CCS_STF_POS_ID.Value = &recCurrentRecord.CCS_STF_POS_ID.Value;
+         &rTempCCS_DERIVED_APR.CCS_STF_ACTION.Value = &recCurrentRecord.CCS_STF_ACTION.Value;
+         /*Check that the empl_rcd is from a JOB Change, POS changes use a negative empl_rcd*/
+         If &recCurrentRecord.EMPL_RCD.Value > - 1 Then
+            &rTempCCS_DERIVED_APR.EMPL_RCD.Value = &recCurrentRecord.EMPL_RCD.Value;
+            &rTempCCS_DERIVED_APR.CCS_DISP_EMPL_RCD.Value = &recCurrentRecord.EMPL_RCD.Value;
+            &rTempCCS_DERIVED_APR.EMPL_CLASS.Value = &rActual_APRV_VW.EMPL_CLASS.Value;
+            
+         End-If;
+         
+         &rTempCCS_DERIVED_APR.EFFDT.Value = &recCurrentRecord.EFFDT.Value;
+         &rTempCCS_DERIVED_APR.CCS_STF_ALLOC_CAT.Value = &recCurrentRecord.CCS_STF_ALLOC_CAT.Value;
+         &rTempCCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value = &recCurrentRecord.CCS_SCHOOL_YR_NUM.Value;
+         &rTempCCS_DERIVED_APR.FTE.Value = &recCurrentRecord.FTE.Value;
+         &rTempCCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value = &recCurrentRecord.CCS_STF_SURPLUS_PP.Value;
+         &rTempCCS_DERIVED_APR.CCS_CHANGE_TYPE.Value = &recCurrentRecord.CCS_CHANGE_TYPE.Value;
+         &rTempCCS_DERIVED_APR.CCS_TRANSACT_NBR.Value = &recCurrentRecord.CCS_TRANSACT_NBR.Value;
+         &rTempCCS_DERIVED_APR.CCS_APPROVAL_STAT.Value = &recCurrentRecord.CCS_APPROVAL_STAT.Value;
+         &rTempCCS_DERIVED_APR.CCS_STA_APPROVAL.Value = &recCurrentRecord.CCS_STA_APPROVAL.Value;
+         
+         
+         &rTempCCS_DERIVED_APR.CCS_NEW_LOCATION.Value = &rNew_APRV_VW.LOCATION.Value;
+         &rTempCCS_DERIVED_APR.CCS_NEW_FTE.Value = &rNew_APRV_VW.FTE.Value;
+         &rTempCCS_DERIVED_APR.CCS_NEW_FTE.Style = "CCS_STF_APPRVL_NEW";
+         &rTempCCS_DERIVED_APR.CCS_NEW_POS_NBR.Value = &rNew_APRV_VW.POSITION_NBR.Value;
+         
+         &rTempCCS_DERIVED_APR.CCS_CUR_LOCATION.Value = &recPrev_APRV_VW.LOCATION.Value;
+         &rTempCCS_DERIVED_APR.CCS_CUR_FTE.Value = &recPrev_APRV_VW.FTE.Value;
+         &rTempCCS_DERIVED_APR.CCS_CUR_FTE.Style = "CCS_STF_APPRVL_OLD";
+         &rTempCCS_DERIVED_APR.CCS_CUR_POS_NBR.Value = &recPrev_APRV_VW.POSITION_NBR.Value;
+         
+         &rTempCCS_DERIVED_APR.CCS_COMBINED_FTE.Value = &recCurrentRecord.CCS_COMBINED_FTE.Value;
+         
+         &rTempCCS_DERIVED_APR.DESCR.Value = &recCurrentRecord.DESCR.Value;
+         &rTempCCS_DERIVED_APR.BGN_DT.Value = &recCurrentRecord.BGN_DT.Value;
+         &rTempCCS_DERIVED_APR.END_DT.Value = &recCurrentRecord.END_DT.Value;
+         
+         /*Figure out if the change is a normal change or a surplus request*/
+         If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
+               &recCurrentRecord.CCS_STF_SURPLUS_PP.Value = "P" Then
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "S";
+         End-If;
+         
+         If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
+               &recCurrentRecord.CCS_STF_ACTION.Value = "T" Then
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "T";
+         End-If;
+         
+         If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
+               &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "R";
+         End-If;
+         
+         If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
+               &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "P";
+         End-If;
+         
+         If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Position" And
+               &recCurrentRecord.CCS_STF_ACTION.Value = "U" Then
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "C";
+         End-If;
+         
+         /*Set the approval or rejected flags for the */
+         If &recCurrentRecord.CCS_APPROVAL_STAT.Value = "A" Then
+            &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "A";
+         End-If;
+         If &recCurrentRecord.CCS_APPROVAL_STAT.Value = "R" Then
+            &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_CAN.Value = "R";
+         End-If;
+         
+         
+         /*Add this record to the temp Approvals rowset*/
+         &rTempCCS_DERIVED_APR.CopyFieldsTo(&rsDisplayApprovals(&nDisplayRow).CCS_DERIVED_APR);
+         
+         /*Set the approval and rejection flags*/
+         If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value = "A" Then
+            &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "A";
+            &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_CAN.Value = "A";
+            
+         End-If;
+         If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value = "R" Then
+            &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_CAN.Value = "R";
+            &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "R";
+         End-If;
+         
+         &rsDisplayApprovals.InsertRow(&nDisplayRow);
+         &nDisplayRow = &nDisplayRow + 1;
+         
+         If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value <> "R" Then
+            &rNew_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
+         End-If;
+         
+      Else
+         
+         /*Not a pending change but it is an approved or completed change so we can use it as the actual values*/
+         If &rNew_APRV_VW.CCS_STA_APPROVAL.Value = "A" Or
+               &rNew_APRV_VW.CCS_STA_APPROVAL.Value = "C" Then
+            &rNew_APRV_VW.CopyFieldsTo(&rActual_APRV_VW);
+            &recTemp_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
+            &rNew_APRV_VW.CopyFieldsTo(&recTemp_APRV_VW);
+            
+            /*Add this actual row into the actual Jobs Array or the Actual EmplIDs Array*/
+            
+            If &rNew_APRV_VW.CCS_CHANGE_TYPE.Value = "Job" Then
+               /*Push this actual row into the Job actuals array to be referenced later*/
+               &nEMPLIDIndex = &aActualEMPLIndx.Find(&rActual_APRV_VW.EMPLID.Value);
+               If &nEMPLIDIndex > 0 Then
+                  &nEMPLRCDIndex = &aActualEMPLIndx [&nEMPLIDIndex].Find(&rActual_APRV_VW.EMPL_RCD.Value);
+                  If &nEMPLRCDIndex > 0 Then
+                     &rActual_APRV_VW.CopyFieldsTo(&aActualEMPL [&nEMPLIDIndex][&nEMPLRCDIndex]);
+                  Else
+                     /*There is no record stored for by this EMPLID and EMPL_RCD yet*/
+                     &aActualEMPLIndx [&nEMPLIDIndex].Push(&rActual_APRV_VW.EMPL_RCD.Value);
+                     &aActualEMPL [&nEMPLIDIndex].Push(&recTemp_APRV_VW);
+                     
+                  End-If;
+               Else
+                  /*There is no actual record stored by this EMPLID yet*/
+                  &aActualEMPL.Push(CreateArrayAny(&rActual_APRV_VW.EMPLID.Value, &rActual_APRV_VW.EMPL_RCD.Value, &recTemp_APRV_VW));
+                  &aActualEMPL.Push(&rActual_APRV_VW.EMPLID.Value);
+                  &aActualEMPLIndx.Push(&rActual_APRV_VW.EMPLID.Value);
+                  &aActualEMPL [&aActualEMPL.Len].Push(&recTemp_APRV_VW);
+                  &aActualEMPLIndx [&aActualEMPLIndx.Len].Push(&rActual_APRV_VW.EMPL_RCD.Value);
+               End-If;
+            End-If;
+            If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Position" Then
+               &nPOSITION_NBRIndex = &aActualPOS.Find(&rActual_APRV_VW.POSITION_NBR.Value);
+               If &nPOSITION_NBRIndex > 0 Then
+                  &rActual_APRV_VW.CopyFieldsTo(&aActualPOS [&nPOSITION_NBRIndex][2]);
+               Else
+                  &aActualPOS.Push(CreateArrayAny(&rActual_APRV_VW.POSITION_NBR, &recTemp_APRV_VW));
+               End-If;
+            End-If;
+         End-If;
+         
+         
+      End-If;
+      
+      /*Set this row to be the previous row*/
+      /*Only if this row hasn't been temporarily rejected will it be used as the previous row
+      If &rsApprovalList(&i).CCS_STF_APRV_VW.CCS_APPROVAL_STAT.Value <> "R" Then
+         &rPOS_Prev_APRV_VW = &rsApprovalList(&i).CCS_STF_APRV_VW;
+      End-If;
+*/
+   End-For;
+   &rsDisplayApprovals.DeleteRow(&nDisplayRow);
+   
+   &i = 0;
+   While &arrRowsToDelete.Next(&i)
+      &rsDisplayApprovals.DeleteRow(&arrRowsToDelete [&i]);
+   End-While;
+   Return &rsDisplayApprovals
+end-method;
+
+method SetLocation
+   /+ &sLOCATION as String +/
+   /*Used for isolating all requested changes for a specific location*/
+   /*Set the object property of location to the passed in variable*/
+   &LOCATION = &sLOCATION;
+   
+   /*Build the WHERE clause for populating the approvals list*/
+   If &WhereClause = "" Then
+      &WhereClause = "WHERE LOCATION = " | &sLOCATION;
+   Else
+      &WhereClause = ", LOCATION = " | &sLOCATION;
+   End-If;
+   
+end-method;
+
+method SetEmplid
+   /+ &sEMPLID as String +/
+   /*Used for isolating all requested changes for a specific employee*/
+   /*Set the object property of location to the passed in variable*/
+   &EMPLID = &sEMPLID;
+   
+   /*Build the WHERE clause for populating the approvals list*/
+   If &WhereClause = "" Then
+      &WhereClause = "WHERE EMPLID = " | &sEMPLID;
+   Else
+      &WhereClause = ", EMPLID = " | &sEMPLID;
+   End-If;
+end-method;
+
+method SetStfPosID
+   /+ &nCCS_STF_POS_ID as Number +/
+   /*Used for isolating all requested changes for a specific position*/
+   /*Set the object property of location to the passed in variable*/
+   &CCS_STF_POS_ID = &nCCS_STF_POS_ID;
+   
+   /*Build the WHERE clause for populating the approvals list*/
+   If &WhereClause = "" Then
+      &WhereClause = "WHERE CCS_STF_POS_ID = " | &nCCS_STF_POS_ID;
+   Else
+      &WhereClause = ", CCS_STF_POS_ID = " | &nCCS_STF_POS_ID;
+   End-If;
+end-method;
+
+method PosGetActualRow
+   /+ &rApprvlRecord as Record +/
+   /+ Returns Record +/
+   
+   
+   /*This function goes out to HR and retrieves the current stored HR values for a position
+Things like the position fte, or who is currently occupying the position*/
+   
+   Local SQL &sqlHrRow;
+   Local Record &recActualRecord;
+   Local Record &recApprovalRecord;
+   
+   Local array of any &aSqlResult;
+   
+   Local string &sPosNumber;
+   
+   Local number &nPOSITION_NBRIndex;
+   
+   Local date &dAsOfDate;
+   
+   Local time &start;
+   Local time &end;
+   /* 
+   &start = %PerfTime;
+   
+   WriteToLog(%ApplicationLogFence_Error, "GET ACTUAL POS");
+*/
+   &sPosNumber = &rApprvlRecord.POSITION_NBR.Value;
+   &dAsOfDate = &rApprvlRecord.EFFDT.Value;
+   
+   &aSqlResult = CreateArrayAny();
+   &recActualRecord = CreateRecord(Record.POSITION_DATA);
+   &recApprovalRecord = CreateRecord(Record.CCS_DERIVED_APR);
+   
+   
+   /*See if we can find any info in the Pos Actual Array first*/
+   
+   &nPOSITION_NBRIndex = &aActualPOS.Find(&rApprvlRecord.POSITION_NBR.Value);
+   If &nPOSITION_NBRIndex > 0 Then
+      &aActualPOS [&nPOSITION_NBRIndex][2].CopyFieldsTo(&recApprovalRecord);
+   Else
+      
+      &sqlHrRow = CreateSQL("SELECT A.POSITION_NBR,A.EFFDT,A.LOCATION, A.FTE, A.JOBCODE FROM PS_POSITION_DATA A  WHERE %EffDtCheck(POSITION_DATA B, A, %datein(:1)) AND A.POSITION_NBR = :2 ", &dAsOfDate, &sPosNumber);
+      If &sqlHrRow.Fetch(&aSqlResult) Then
+         
+         &recApprovalRecord.POSITION_NBR.Value = &aSqlResult [1];
+         &recApprovalRecord.EFFDT.Value = &aSqlResult [2];
+         &recApprovalRecord.LOCATION.Value = &aSqlResult [3];
+         &recApprovalRecord.FTE.Value = &aSqlResult [4];
+         &recApprovalRecord.JOBCODE.Value = &aSqlResult [5];
+         &recApprovalRecord.CCS_CHANGE_TYPE.Value = "Position";
+         
+         /*
+         &recApprovalRecord.POSITION_NBR.Value = &recActualRecord.POSITION_NBR.Value;
+         &recApprovalRecord.EFFDT.Value = &recActualRecord.EFFDT.Value;
+         &recApprovalRecord.LOCATION.Value = &recActualRecord.LOCATION.Value;
+         &recApprovalRecord.FTE.Value = &recActualRecord.FTE.Value;
+         &recApprovalRecord.JOBCODE.Value = &recActualRecord.JOBCODE.Value;
+         &recApprovalRecord.CCS_CHANGE_TYPE.Value = "Position";
+ */
+      Else
+         &rApprvlRecord.CopyFieldsTo(&recApprovalRecord);
+      End-If;
+      
+      &sqlHrRow.Close();
+   End-If;
+   /*   
+   &end = %PerfTime;
+   WriteToLog(%ApplicationLogFence_Error, "Get Actual Pos Run time GNNWG time (s) = " | NumberToString("%6.3", Value(&end - &start)));
+*/
+   
+   Return &recApprovalRecord;
+end-method;
+
+
+method JobGetActualRow
+   /+ &rApprvlRecord as Record +/
+   /+ Returns Record +/
+   /*This function goes out to HR and retrieves the current stored HR values for a position
+Things like the position fte, or who is currently occupying the position*/
+   
+   Local SQL &sqlHrRow;
+   Local Record &recActualRecord;
+   Local Record &recApprovalRecord;
+   
+   Local array of any &aSqlResult;
+   
+   Local string &sEmplid;
+   
+   Local number &nEmplRcd;
+   Local number &nEMPLIDIndex;
+   Local number &nEMPLRCDIndex;
+   
+   Local date &dAsOfDate;
+   
+   Local time &start;
+   Local time &end;
+   &start = %PerfTime;
+   
+   WriteToLog(%ApplicationLogFence_Error, "GET ACTUAL JOB");
+   
+   &sEmplid = &rApprvlRecord.EMPLID.Value;
+   &nEmplRcd = &rApprvlRecord.EMPL_RCD.Value;
+   &dAsOfDate = &rApprvlRecord.EFFDT.Value;
+   
+   &aSqlResult = CreateArrayAny();
+   &recActualRecord = CreateRecord(Record.JOB);
+   &recApprovalRecord = CreateRecord(Record.CCS_DERIVED_APR);
+   
+   &nEMPLIDIndex = &aActualEMPLIndx.Find(&rApprvlRecord.EMPLID.Value);
+   If &nEMPLIDIndex > 0 Then
+      &nEMPLRCDIndex = &aActualEMPLIndx [&nEMPLIDIndex].Find(&rApprvlRecord.EMPL_RCD.Value);
+      If &nEMPLRCDIndex > 0 Then
+         
+         &aActualEMPL [&nEMPLIDIndex][&nEMPLRCDIndex].CopyFieldsTo(&recApprovalRecord);
+      End-If;
+   End-If;
+   
+   /*Check if the record was filled from the EMPLID Actuals array*/
+   /*If it wasn't fill it from the HR data*/
+   If &recApprovalRecord.EMPLID.Value = "" Then
+      WriteToLog(%ApplicationLogFence_Error, "GET ACTUAL JOB");
+      &sqlHrRow = CreateSQL("SELECT A.POSITION_NBR,A.EMPLID,A.EMPL_RCD,A.EFFDT,A.LOCATION,A.JOBCODE,A.EMPL_CLASS,A.EFFDT, A.FTE FROM PS_JOB A WHERE A.EFFDT = (SELECT MAX(EFFDT)	FROM PS_JOB B WHERE B.EMPLID = A.EMPLID	AND B.EMPL_RCD = A.EMPL_RCD	AND B.EFFDT <= %Datein(:1)) AND A.EMPLID = " | &sEmplid | " AND A.EMPL_RCD = :2 AND  A.EFFSEQ =(SELECT MAX(Y.EFFSEQ) FROM PS_JOB Y WHERE Y.EMPLID = A.EMPLID AND Y.EMPL_RCD = A.EMPL_RCD AND Y.EFFDT = A.EFFDT)", &dAsOfDate, &nEmplRcd);
+      /*    
+      &sqlHrRow.Execute();
+  */
+      If &sqlHrRow.Fetch(&aSqlResult) Then
+         
+         &recApprovalRecord.POSITION_NBR.Value = &aSqlResult [1];
+         &recApprovalRecord.EMPLID.Value = &aSqlResult [2];
+         &recApprovalRecord.EMPL_RCD.Value = &aSqlResult [3];
+         &recApprovalRecord.EFFDT.Value = &aSqlResult [4];
+         &recApprovalRecord.LOCATION.Value = &aSqlResult [5];
+         &recApprovalRecord.JOBCODE.Value = &aSqlResult [6];
+         &recApprovalRecord.EMPL_CLASS.Value = &aSqlResult [7];
+         &recApprovalRecord.EFFDT.Value = &aSqlResult [8];
+         &recApprovalRecord.FTE.Value = &aSqlResult [9];
+         &recApprovalRecord.CCS_CHANGE_TYPE.Value = "Job";
+         
+         
+      Else
+         &rApprvlRecord.CopyFieldsTo(&recApprovalRecord);
+         
+      End-If;
+      
+      
+      &sqlHrRow.Close();
+   End-If;
+   /*  Debugging stuff
+   &end = %PerfTime;
+   WriteToLog(%ApplicationLogFence_Error, "Get Actual JOB Run time GNNWG time (s) = " | NumberToString("%6.3", Value(&end - &start)));
+*/
+   Return &recApprovalRecord;
+   
+end-method;
+
+method GetCurrentPosInfo
+   /+ &recCurRow as Record, +/
+   /+ &recActualRow as Record +/
+   /+ Returns Record +/
+   
+   
+   Local Record &recTempCurRow;
+   Local Record &recTempEmplid0;
+   Local number &nPosIndex;
+   Local number &nEmplIdIndex;
+   Local number &nEmplArrayIndex;
+   Local number &nLastEntry;
+   Local number &nTempCombinedFTE;
+   Local string &sCalcCombFTE;
+   
+   
+   &recTempCurRow = CreateRecord(Record.CCS_STF_APRV_VW);
+   &recTempEmplid0 = CreateRecord(Record.CCS_STF_APRV_VW);
+   
+   &recCurRow.CopyFieldsTo(&recTempCurRow);
+   
+   &nPosIndex = &aPOSITION_NBR.Find(&recCurRow.POSITION_NBR.Value);
+   If &nPosIndex = 0 Then
+      
+      &aPOSITION_NBR.Push(&recCurRow.POSITION_NBR.Value);
+      &nPosIndex = &aPOSITION_NBR.Len;
+      /*See if the current row has Pos information*/
+      If None(&recCurRow.FTE.Value) Then
+         /*If it doesn't see if it's related to the current actual row */
+         If &recActualRow.POSITION_NBR.Value <> &recCurRow.POSITION_NBR.Value Then
+            
+            /*Get the actual position data for this row*/
+            &recActualRow = %This.PosGetActualRow(&recCurRow);
+            &recCurRow.FTE.Value = &recActualRow.FTE.Value;
+            &recCurRow.CCS_COMBINED_FTE.Value = &recActualRow.CCS_COMBINED_FTE.Value;
+            
+            &recTempCurRow.FTE.Value = &recActualRow.FTE.Value;
+            &recTempCurRow.CCS_COMBINED_FTE.Value = &recActualRow.CCS_COMBINED_FTE.Value;
+            
+            &recTempEmplid0.FTE.Value = &recActualRow.FTE.Value;
+            &recTempEmplid0.CCS_COMBINED_FTE.Value = 0;
+            
+         End-If
+      End-If;
+      /*Copy the Actual Position Info into the EMPLID 0 row*/
+      &aPOSITION_NBR [&nPosIndex].Push(0);
+      &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Len;
+      &aPOSITION_INFO [&nPosIndex] = CreateArrayAny();
+      &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex] = &recTempEmplid0;
+      &recActualRow.CopyFieldsTo(&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex]);
+      /*Zero out the Combined FTE for the EMPLID at zero*/
+      &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex].CCS_COMBINED_FTE.Value = 0;
+      
+   End-If;
+   
+   
+   
+   &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Find(&recCurRow.EMPLID.Value);
+   &nEmplArrayIndex = &aEMPLID.Find(&recCurRow.EMPLID.Value);
+   If &nEmplIdIndex > 0 Then
+      If &recCurRow.EMPLID.Value <> 0 Then
+         &nTempCombinedFTE = &recCurRow.CCS_COMBINED_FTE.Value - (&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex].FTE.VALUE - &recCurRow.FTE.Value);
+         &recCurRow.CCS_COMBINED_FTE.Value = &nTempCombinedFTE;
+         &recCurRow.CopyFieldsTo(&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex]);
+         /*Find the entry for EMPLID 0 */
+         &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Find(0);
+         /*Overwrite it with this rows information*/
+         &recCurRow.CopyFieldsTo(&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex]);
+         /*Set the Combined FTE for EMPLID 0 To zero*/
+         &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex].CCS_COMBINED_FTE.Value = 0;
+      Else
+         /*This is a non emplid row so copy it to the emplid 0 spot in the pos info array*/
+         &recCurRow.CCS_COMBINED_FTE.Value = 0;
+         &recCurRow.CopyFieldsTo(&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex]);
+         
+      End-If;
+   Else
+      /*Check if there is anything in the EMPLID sub-array besides just the position number and a default entry for EMPLID 0*/
+      If &aPOSITION_NBR [&nPosIndex].Len > 2 Then
+         /*If there is we'll take the position inforation out of the entry associated with EMPLID 0 Which is the 
+				default Position info for the position ID*/
+         &aPOSITION_NBR [&nPosIndex].Push(&recCurRow.EMPLID.Value);
+         &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Len;
+         &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex] = &recTempCurRow;
+      Else
+         
+         /*         If &recCurRow.CCS_CHANGE_TYPE.Value = "Position" Then*/
+         If &nEmplArrayIndex = 0 Or
+               &aEMPLID [&nEmplArrayIndex].Len < 4 Then
+            &sCalcCombFTE = "No";
+         End-If;
+         
+         If &recCurRow.EMPLID.Value <> 0 Then
+            /*Check if this is a row with an actual EMPLID associated with it*/
+            &aPOSITION_NBR [&nPosIndex].Push(&recCurRow.EMPLID.Value);
+            &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Len;
+            /*Check if an array has already been started for this Position Number*/
+            If &nEmplIdIndex > 1 Then
+               
+               &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex] = &recTempCurRow
+            Else
+               
+               &aPOSITION_INFO [&nPosIndex] = CreateArrayAny();
+               &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex] = &recTempCurRow;
+            End-If;
+         End-If;
+         
+         
+      End-If;
+      If &recCurRow.EMPLID.Value <> 0 Then
+         /*If the current row doesn't have an EMPLID of 0 it is a job change, but we will use it's POSITION info to fill 
+					the default entry at EMPLID 0*/
+         &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Find(0);
+         
+         If &sCalcCombFTE <> "No" Then
+            &nTempCombinedFTE = &recCurRow.CCS_COMBINED_FTE.Value - (&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex].FTE.VALUE - &recCurRow.FTE.Value);
+            
+            &recCurRow.CCS_COMBINED_FTE.Value = &nTempCombinedFTE;
+            
+            /*Store the combined FTE for the employee in the EMPLOYEE Array*/
+            If &nEmplArrayIndex > 0 Then
+               &aEMPLID [&nEmplArrayIndex][2] = &nTempCombinedFTE;
+            End-If;
+         End-If;
+      End-If;
+      /*Find the entry for EMPLID 0 And we'll copy this rows info into it*/
+      &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Find(0);
+      If &nEmplIdIndex = 0 Then
+         /*Does not have a row for EMPLID 0 yet so we'll create one*/
+         &aPOSITION_NBR [&nPosIndex].Push(0);
+         &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Len;
+         &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex] = &recTempEmplid0;
+      Else
+         &recCurRow.CopyFieldsTo(&aPOSITION_INFO [&nPosIndex][&nEmplIdIndex]);
+      End-If;
+      /*Wipe out the CombinedFTE at Emplid 0 because if it's not associated with an EMPLID it should not have a Combined FTE*/
+      &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex].CCS_COMBINED_FTE.Value = 0;
+   End-If;
+   
+   Return &recCurRow;
+   
+end-method;
+
+
+method GetPreviousPosInfo
+   /+ &recCurRow as Record +/
+   /+ Returns Record +/
+   
+   Local Record &recPrevRecord;
+   
+   Local number &nPosIndex;
+   Local number &nEmplIdIndex;
+   
+   &recPrevRecord = CreateRecord(Record.CCS_STF_APRV_VW);
+   
+   &nPosIndex = &aPOSITION_NBR.Find(&recCurRow.POSITION_NBR.Value);
+   If &nPosIndex > 0 Then
+      If None(&recCurRow.EMPLID.Value) Then
+         &recCurRow.EMPLID.Value = 0;
+      End-If;
+      
+      &nEmplIdIndex = &aPOSITION_NBR [&nPosIndex].Find(&recCurRow.EMPLID.Value);
+      If &nEmplIdIndex > 0 Then
+         &aPOSITION_INFO [&nPosIndex][&nEmplIdIndex].CopyFieldsTo(&recPrevRecord);
+      End-If;
+      
+   End-If;
+   
+   Return &recPrevRecord;
+   
+end-method;
+
