@@ -1,0 +1,620 @@
+import CCS_STF_STA:CCS_JOB;
+import CCS_STF_STA:CCS_TRANSACTION;
+
+Declare Function CCS_CUR_YR_STAFF PeopleCode CCS_FUNCLIB_STA.CCS_CUR_YR_STAFF FieldFormula;
+Declare Function CCS_GET_ALLOCATION_CAT PeopleCode CCS_FUNCLIB_STA.CCS_GET_ALLOC_CAT FieldFormula;
+Declare Function CCS_POSCHG_OCPY_DT PeopleCode CCS_FUNCLIB_STA.CCS_POSCHG_OCPY_DT FieldFormula;
+Declare Function CcsEeTransPageLoad PeopleCode CCS_EE_TRAN_FNC.CCS_EE_TRANS_LOD FieldFormula;
+
+Component Rowset &rs0, &rs1, &rs2;
+Component Record &Rec, &recCCS_DERIVED_STA, &recCCS_DERIVED_STA_0;
+Component number &numSchoolYr;
+Component number &nMaxEmplRcd;
+Component string &StaffYearStatus, &EmplID;
+
+Local object &oJobObj;
+Local object &oJobTransaction;
+
+Local Row &rowPosRow;
+
+Local Record &recOccupyDates;
+
+Local number &nSchoolYr;
+Local number &nFTE;
+Local number &nStdHours;
+Local number &nTransNbr;
+
+
+Local string &sPosNbr;
+Local string &sStaApproval;
+Local string &sEffStatus;
+Local string &sChgAction;
+Local string &sChgCat;
+Local string &sDeptid;
+Local string &sJobCode;
+Local string &sAllocCat;
+Local string &sPosDescr;
+Local string &sUnionCode;
+Local string &sPosPoolID;
+Local string &sEmplID;
+Local string &sEmplRcd;
+
+Local string &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc;
+Local string &sLocation, &sPaygroup, &sEmplStatus, &sCntrTyp, &sSurplus;
+Local string &sEmplRcd_REMOVE;
+
+Local date &dEFFDT;
+Local date &dOccpyEndDate;
+
+Local array of number &arrTransNumbers;
+
+&EmplID = GetField(CCS_EEPROF_SRC.EMPLID).Value;
+
+&nSchoolYr = &numSchoolYr;
+&nMaxEmplRcd = - 1;
+
+&arrTransNumbers = CreateArrayRept(0, 0);
+If %Page = "CCS_EECHG_CYR" Then
+   
+   REM WinMessage("Begin CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange " | "&EmplID=" | &EmplID | "&nSchoolYr=" | &nSchoolYr, 0);
+   
+   /*============================================================================
+  Code for Grid Current Occupies CCS_CJOB_CON_RM
+  Description:  Get Remove flag and Remove EE Job Position from CCS_EE_JOB_STF
+ ============================================================================*/
+   &rs0 = GetLevel0();
+   &rs1 = &rs0(1).GetRowset(Scroll.CCS_CJOB_CON_RM);
+   
+   For &i = 1 To &rs1.ActiveRowCount
+      
+      /*Get the Current Occupy data and Job Removal info */
+      &rowPosRow = GetRow();
+      &recCCS_DERIVED_STA1 = &rs1(&i).GetRecord(Record.CCS_DERIVED_STA);
+      If All(&rs1(&i).CCS_DERIVED_STA.CCS_REMOVAL_DT.Value) Then
+         &dEFFDT = &rs1(&i).CCS_DERIVED_STA.CCS_REMOVAL_DT.Value;
+      Else
+         &dEFFDT = %Date;
+      End-If;
+      &sEmplID = &EmplID;
+      &sEmplRcd = &rs1(&i).CCS_CJOB_CON_RM.EMPL_RCD.Value;
+      &sLocation = &rs1(&i).CCS_CJOB_CON_RM.LOCATION.Value;
+      &sJobCode = &rs1(&i).CCS_CJOB_CON_RM.JOBCODE.Value;
+      &sPosNbr = &rs1(&i).CCS_CJOB_CON_RM.POSITION_NBR.Value;
+      &sPaygroup = &rs1(&i).CCS_CJOB_CON_RM.PAYGROUP.Value;
+      &sEmplStatus = &rs1(&i).CCS_CJOB_CON_RM.EMPL_STATUS.Value;
+      &sCntrTyp = &rs1(&i).CCS_CJOB_CON_RM.CCS_STF_CNTRCT_TYP.Value;
+      &sEmplRcd_REMOVE = &recCCS_DERIVED_STA1.CCS_EECHG_REMOVE.Value;
+      
+      If Value(&sEmplRcd) > &nMaxEmplRcd Then
+         &nMaxEmplRcd = Value(&sEmplRcd);
+      End-If;
+      
+      If &sEmplRcd_REMOVE = "R" Then
+         /* Insert Removed Job into CCS_EE_JOB_STF */
+         REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange Current Occupy " | " EmplID=" | &EmplID | " EmplRcd=" | &sEmplRcd| " REMOVE=" | &sEmplRcd_REMOVE | " Date=" | &sRemovalDt, 0);
+         REM &sAllocCat = CCS_GET_ALLOCATION_CAT(&sJobCode);
+         
+         SQLExec(SQL.CCS_JOB_TO_ALC_SQL, &dEFFDT, &sJobCode, &sAllocCat);
+         
+         &oJobTransaction = create CCS_STF_STA:CCS_TRANSACTION();
+         &oJobObj = create CCS_STF_STA:CCS_JOB();
+         &oJobObj.recJob.LOCATION.Value = &sLocation;
+         If Not &oJobObj.FindPosID(0, &sPosNbr) Then
+            &oJobObj.InsertPosID();
+         End-If;
+         
+         /*Set-up to Record the transaction*/
+         &sEffStatus = "I"; /*EFF_STATUS = I indicates EE has been removed from current position */
+         &sChgCat = "Employee Transfer From";
+         &sStaApproval = "S"; /*Saved as Draft*/
+         &sChgAction = "S"; /*Save as Draft*/
+         &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+         &oJobTransaction.CreateTransactKey(&nSchoolYr, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+         &oJobTransaction.sPositionNbr = &sPosNbr;
+         /*See if there is an existing staffing Job Row for this change*/
+         If &oJobObj.BuildJobRemoval(&nSchoolYr, &sEmplID, &sEmplRcd, &oJobObj.nPosId) Then
+            
+            &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+            &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+            
+            
+            /*Record the transaction*/
+            &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+            
+            /*Unfinished change already exists for this action, overwrite*/
+            If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               &oJobObj.UpdateJobChange();
+               
+            Else
+               
+               If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "P" Then
+                  WinMessage("There is already a pending change for removing the Employee from Position#: " | &sPosNbr);
+               Else
+                  &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                  /*Create a new job change*/
+                  &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+                  &oJobObj.InsertJobChange();
+               End-If;
+            End-If;
+         Else
+            
+            /*Check if this is a job they were placed into this year*/
+            If &oJobObj.BuildJobTransfer(&nSchoolYr, &sEmplID, &sEmplRcd, &oJobObj.nPosId) Then
+               If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
+                  /*If the job placement is saved as draft or pending or approved do whatever you want to it*/
+                  If &oJobObj.recJob.EFFDT.Value >= &dEFFDT Then
+                     /*The removal is happening before or on the same date as the placement 
+					   Delete the previous placement*/
+                     &oJobObj.DeleteJobChange();
+                  Else
+                     /*The removal is taking place after the placement*/
+                     &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+                     &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                     &oJobObj.recJob.CCS_STF_ACTION.Value = "R";
+                     &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                     &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                     &oJobObj.UpdateJobChange();
+                  End-If;
+               Else
+                  /*There is already a change that has been completed or finished so 
+					we'll add a new change */
+                  &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+                  &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                  &oJobObj.recJob.CCS_STF_ACTION.Value = "R";
+                  &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                  &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                  &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+                  &oJobObj.InsertJobChange();
+               End-If;
+               &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+            Else
+               
+               /*No existing Job data in CCS_EE_JOB_STF so we'll populate a new record and then insert it */
+               &oJobObj.recJob.LOCATION.Value = &sLocation;
+               &oJobObj.recJob.SETID.Value = "CRCSS";
+               &oJobObj.recJob.PAYGROUP.Value = &sPaygroup;
+               &oJobObj.recJob.EMPL_STATUS.Value = &sEmplStatus;
+               &oJobObj.recJob.CCS_STF_CNTRCT_TYP.Value = &sCntrTyp;
+               &oJobObj.recJob.CCS_STF_ALLOC_CAT.Value = &sAllocCat;
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               &oJobObj.recJob.CCS_STF_SURPLUS_PP.Value = &sSurplus;
+               &oJobObj.recJob.LASTUPDDTTM.Value = %Datetime;
+               &oJobObj.recJob.LASTUPDOPRID.Value = %OperatorId;
+               &oJobObj.recJob.CREATEDTTM.Value = %Datetime;
+               &oJobObj.recJob.CREATED_BY.Value = %OperatorId;
+               &oJobObj.recJob.CCS_TRANSACT_Key.Value = &oJobTransaction.sCCS_TRANSACT_KEY;
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &arrTransNumbers.Push(&oJobObj.nCCS_TRANSACT_NBR);
+               &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+               &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+               &oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value = &nSchoolYr;
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "R";
+               
+               &oJobObj.InsertJobChange();
+               
+               /*Record the transaction*/
+               &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+               
+            End-If;
+         End-If;
+         
+      End-If;
+   End-For;
+   
+   /*============================================================================
+  Code for Grid New Occupies CCS_EE_JOB_STF
+  Description:  Get input data for New Occupies and Insert into CCS_EE_JOB_STF
+ ============================================================================*/
+   &rs0 = GetLevel0();
+   &rs2 = &rs0(1).GetRowset(Scroll.CCS_EE_JOB_STF);
+   
+   For &i = 1 To &rs2.ActiveRowCount
+      /*Get the New Occupy data for the CCS_EE_JOB_STF table */
+      &rowPosRow = GetRow();
+      &recCCS_DERIVED_STA = &rs2(&i).GetRecord(Record.CCS_DERIVED_STA);
+      If All(&rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value) Then
+         /*
+         &dEFFDT = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value;
+		 */
+         &dEFFDT = %Date;
+      Else
+         &dEFFDT = %Date;
+         &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value = %Date;
+      End-If;
+      &sEmplID = &EmplID;
+      If &nMaxEmplRcd < 900 Then
+         &sEmplRcd = "900";
+      Else
+         &sEmplRcd = &nMaxEmplRcd + 1 | "";
+      End-If;
+      &sPosNbr = &recCCS_DERIVED_STA.CCS_NEW_POS_NBR.Value;
+      &sUnionCd = &recCCS_DERIVED_STA.CCS_NEW_POS_NBR.GetRelated(CCS_CPOS_CNS_VW.UNION_CD).Value;
+      &sJobCode = &rs2(&i).GetRecord(Record.CCS_CPOS_CNS_VW).JOBCODE.Value;
+      
+      If &sPosNbr <> "" Then
+         REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &EmplID | " PosNbr=" | &sPosNbr | " Loc=" | &recCCS_DERIVED_STA.LOCATION.Value | " &sUnionCd=" | &sUnionCd, 0);
+         /* Check if Position currently has Occupies and Show Warning if it does */
+         &sEEOccupy = "";
+         SQLExec("SELECT EMPLID, EMPL_RCD, LOCATION FROM PS_CCS_CSTFLIS_ALL WHERE POSITION_NBR = :1", &sPosNbr, &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc);
+         If &sEEOccupy <> "" Then
+            MessageBox(%MsgStyle_OK, "", 20001, 31, "WARNINGS: This Position currently has Occupies");
+            REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &sEEOccupy, 0);
+            /* Find and Insert Current EE Occupy into CCS_EE_JOB_STF */
+         End-If;
+         /* Insert New Occupy into CCS_EE_JOB_STF */
+         REM &sAllocCat = CCS_GET_ALLOCATION_CAT(&sJobCode);
+         
+         SQLExec(SQL.CCS_JOB_TO_ALC_SQL, &dEFFDT, &sJobCode, &sAllocCat);
+         &oJobTransaction = create CCS_STF_STA:CCS_TRANSACTION();
+         &oJobObj = create CCS_STF_STA:CCS_JOB();
+         &oJobObj.recJob.LOCATION.Value = &recCCS_DERIVED_STA.LOCATION.Value;
+         If Not &oJobObj.FindPosID(0, &sPosNbr) Then
+            &oJobObj.InsertPosID();
+         End-If;
+         /*Set-up to Record the transaction*/
+         &sChgCat = "Employee Placement";
+         &sStaApproval = "S"; /*Saved as Draft*/
+         &sEffStatus = "A";
+         &sChgAction = "S"; /*Save as Draft*/
+         If &sUnionCd = "ATA" Then
+            &sPaygroup = "MMM"
+         Else
+            &sPaygroup = "STF"
+         End-If;
+         
+         &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+         &oJobTransaction.CreateTransactKey(&nSchoolYr, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+         &oJobTransaction.sPositionNbr = &sPosNbr;
+         /*See if there is an existing staffing Job Row for this change*/
+         If &oJobObj.BuildJobTransfer(&nSchoolYr, &sEmplID, &sEmplRcd, &oJobObj.nPosId) Then
+            
+            If &arrTransNumbers.Len > 0 Then
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &arrTransNumbers.Shift();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "T"; /*Transfer to a new position because it has an associate position removal*/
+            Else
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
+            End-If;
+            
+            &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+            &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+            
+            /*Existing change in save or pending approval status so just overwrite it*/
+            If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               &oJobObj.UpdateJobChange();
+            Else
+               If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "P" Then
+                  WinMessage("There is already a pending placement for this Employee into Position #: " | &sPosNbr);
+               Else
+                  &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                  
+                  /*Create a new change*/
+                  &oJobObj.InsertJobChange();
+               End-If;
+            End-If;
+            
+            &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+         Else
+            
+            /*No existing Job data in CCS_EE_JOB_STF so we'll populte a new record and then insert it */
+            &oJobObj.recJob.LOCATION.Value = &recCCS_DERIVED_STA.LOCATION.Value;
+            &oJobObj.recJob.SETID.Value = "CRCSS";
+            &oJobObj.recJob.PAYGROUP.Value = &sPaygroup;
+            &oJobObj.recJob.EMPL_STATUS.Value = &sEmplStatus;
+            &oJobObj.recJob.CCS_STF_CNTRCT_TYP.Value = &sCntrTyp;
+            &oJobObj.recJob.CCS_STF_ALLOC_CAT.Value = &sAllocCat;
+            &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+            &oJobObj.recJob.CCS_STF_SURPLUS_PP.Value = &sSurplus;
+            &oJobObj.recJob.LASTUPDDTTM.Value = %Datetime;
+            &oJobObj.recJob.LASTUPDOPRID.Value = %OperatorId;
+            &oJobObj.recJob.CREATEDTTM.Value = %Datetime;
+            &oJobObj.recJob.CREATED_BY.Value = %OperatorId;
+            &oJobObj.recJob.CCS_TRANSACT_Key.Value = &oJobTransaction.sCCS_TRANSACT_KEY;
+            If &arrTransNumbers.Len > 0 Then
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &arrTransNumbers.Shift();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "T"; /*Transfer to a new position because it has an associate position removal*/
+            Else
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
+            End-If;
+            &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+            &oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value = &nSchoolYr;
+            &oJobObj.InsertJobChange();
+         End-If;
+         /*Record the Position Occupy Begin and End Dates*/
+         &dOccpyEndDate = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_END_DT.Value;
+         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &dEFFDT, &dOccpyEndDate);
+         
+         /*Record the transaction*/
+         &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+      End-If;
+      
+   End-For;
+End-If;
+
+If %Page = "CCS_EECHG_FYR" Then
+   
+   /*============================================================================
+  Code for Grid Current Occupies CCS_FJOB_CON_RM
+  Description:  Get Remove flag and Remove EE Job Position from CCS_EE_JOB_STF
+ ============================================================================*/
+   &rs0 = GetLevel0();
+   &rs1 = &rs0(1).GetRowset(Scroll.CCS_FJOB_CON_RM);
+   
+   For &i = 1 To &rs1.ActiveRowCount
+      /*Get the Current Occupy data and Job Removal info */
+      &rowPosRow = GetRow();
+      &recCCS_DERIVED_STA1 = &rs1(&i).GetRecord(Record.CCS_DERIVED_STA);
+      
+      If All(&rs1(&i).CCS_DERIVED_STA.CCS_REMOVAL_DT.Value) Then
+         &dEFFDT = &rs1(&i).CCS_DERIVED_STA.CCS_REMOVAL_DT.Value;
+      Else
+         &dEFFDT = %Date;
+      End-If;
+      
+      &sEmplID = &EmplID;
+      &sEmplRcd = &rs1(&i).CCS_FJOB_CON_RM.EMPL_RCD.Value;
+      &sLocation = &rs1(&i).CCS_FJOB_CON_RM.LOCATION.Value;
+      &sJobCode = &rs1(&i).CCS_FJOB_CON_RM.JOBCODE.Value;
+      &sPosNbr = &rs1(&i).CCS_FJOB_CON_RM.POSITION_NBR.Value;
+      &sPaygroup = &rs1(&i).CCS_FJOB_CON_RM.PAYGROUP.Value;
+      &sEmplStatus = &rs1(&i).CCS_FJOB_CON_RM.EMPL_STATUS.Value;
+      &sCntrTyp = &rs1(&i).CCS_FJOB_CON_RM.CCS_STF_CNTRCT_TYP.Value;
+      &sEmplRcd_REMOVE = &recCCS_DERIVED_STA1.CCS_EECHG_REMOVE.Value;
+      
+      
+      If Value(&sEmplRcd) > &nMaxEmplRcd Then
+         &nMaxEmplRcd = Value(&sEmplRcd);
+      End-If;
+      
+      
+      If &sEmplRcd_REMOVE = "R" Then
+         /* Insert Removed Job into CCS_EE_JOB_STF */
+         REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange Current Occupy " | " EmplID=" | &EmplID | " EmplRcd=" | &sEmplRcd| " REMOVE=" | &sEmplRcd_REMOVE | " Date=" | &sRemovalDt, 0);
+         REM &sAllocCat = CCS_GET_ALLOCATION_CAT(&sJobCode);
+         
+         /*Get the Allocation Cat associated with the specified jobcode*/
+         SQLExec(SQL.CCS_JOB_TO_ALC_SQL, &dEFFDT, &sJobCode, &sAllocCat);
+         &oJobTransaction = create CCS_STF_STA:CCS_TRANSACTION();
+         &oJobObj = create CCS_STF_STA:CCS_JOB();
+         &oJobObj.recJob.LOCATION.Value = &sLocation;
+         If Not &oJobObj.FindPosID(0, &sPosNbr) Then
+            &oJobObj.InsertPosID();
+         End-If;
+         /*Set-up to Record the transaction*/
+         &sEffStatus = "I"; /*EFF_STATUS = I indicates EE has been removed from current position */
+         &sChgCat = "Employee Transfer From";
+         &sStaApproval = "S"; /*Saved as Draft*/
+         &sChgAction = "S"; /*Save as Draft*/
+         &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+         &oJobTransaction.CreateTransactKey(&nSchoolYr, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+         &oJobTransaction.sPositionNbr = &sPosNbr;
+         /*See if there is an existing staffing Job Row for this change*/
+         If &oJobObj.BuildJobRemoval(&nSchoolYr, &sEmplID, &sEmplRcd, &oJobObj.nPosId) Then
+            
+            &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+            &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+            
+            
+            /*Record the transaction*/
+            &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+            
+            If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               &oJobObj.UpdateJobChange();
+            Else
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               /*Create a new job change*/
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.InsertJobChange();
+            End-If;
+            
+         Else
+            If &oJobObj.BuildJobTransfer(&nSchoolYr, &sEmplID, &sEmplRcd, &oJobObj.nPosId) Then
+               If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
+                  /*If the job placement is saved as draft or pending or approved do whatever you want to it*/
+                  If &oJobObj.recJob.EFFDT.Value >= &dEFFDT Then
+                     /*The removal is happening before or on the same date as the placement 
+					   Delete the previous placement*/
+                     &oJobObj.DeleteJobChange();
+                  Else
+                     /*The removal is taking place after the placement*/
+                     &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+                     &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                     &oJobObj.recJob.CCS_STF_ACTION.Value = "R";
+                     &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                     &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                     &oJobObj.UpdateJobChange();
+                  End-If;
+               Else
+                  If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "P" Then
+                     WinMessage("There is already a pending change for removing the Employee from Position#: " | &sPosNbr);
+                  Else
+                     /*There is already a change that has been completed or finished so 
+						we'll add a new change */
+                     &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+                     &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                     &oJobObj.recJob.CCS_STF_ACTION.Value = "R";
+                     &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+                     &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                     &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+                     &oJobObj.InsertJobChange();
+                  End-If;
+               End-If;
+               &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+            Else
+               
+               /*No existing Job data in CCS_EE_JOB_STF so we'll populte a new record and then insert it */
+               &oJobObj.recJob.LOCATION.Value = &sLocation;
+               &oJobObj.recJob.SETID.Value = "CRCSS";
+               &oJobObj.recJob.PAYGROUP.Value = &sPaygroup;
+               &oJobObj.recJob.EMPL_STATUS.Value = &sEmplStatus;
+               &oJobObj.recJob.CCS_STF_CNTRCT_TYP.Value = &sCntrTyp;
+               &oJobObj.recJob.CCS_STF_ALLOC_CAT.Value = &sAllocCat;
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               &oJobObj.recJob.CCS_STF_SURPLUS_PP.Value = &sSurplus;
+               &oJobObj.recJob.LASTUPDDTTM.Value = %Datetime;
+               &oJobObj.recJob.LASTUPDOPRID.Value = %OperatorId;
+               &oJobObj.recJob.CREATEDTTM.Value = %Datetime;
+               &oJobObj.recJob.CREATED_BY.Value = %OperatorId;
+               &oJobObj.recJob.CCS_TRANSACT_Key.Value = &oJobTransaction.sCCS_TRANSACT_KEY;
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &arrTransNumbers.Push(&oJobObj.nCCS_TRANSACT_NBR);
+               &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+               &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+               &oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value = &nSchoolYr;
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "R";
+               &oJobObj.InsertJobChange();
+               
+               /*Record the transaction*/
+               &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+            End-If;
+         End-If;
+         
+      End-If;
+   End-For;
+   
+   /*============================================================================
+  Code for Grid New Occupies CCS_EE_JOB_STF
+  Description:  Get input data for New Occupies and Insert into CCS_EE_JOB_STF
+ ============================================================================*/
+   &rs0 = GetLevel0();
+   &rs2 = &rs0(1).GetRowset(Scroll.CCS_EE_JOB_STF);
+   
+   For &i = 1 To &rs2.ActiveRowCount
+      /*Get the New Occupy data for the CCS_EE_JOB_STF table */
+      &rowPosRow = GetRow();
+      &recCCS_DERIVED_STA = &rs2(&i).GetRecord(Record.CCS_DERIVED_STA);
+      
+      If All(&rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value) Then
+         /*
+         &dEFFDT = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value;
+*/
+         &dEFFDT = %Date;
+      Else
+         &dEFFDT = %Date;
+         &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value = %Date;
+      End-If;
+      
+      &sEmplID = &EmplID;
+      If &nMaxEmplRcd < 900 Then
+         &sEmplRcd = "900";
+      Else
+         &sEmplRcd = &nMaxEmplRcd + 1 | "";
+      End-If;
+      
+      &sPosNbr = &recCCS_DERIVED_STA.CCS_NEW_POS_NBR.Value;
+      &sUnionCd = &recCCS_DERIVED_STA.CCS_NEW_POS_NBR.GetRelated(CCS_FPOS_CNS_VW.UNION_CD).Value;
+      &sJobCode = &rs2(&i).GetRecord(Record.CCS_FPOS_CNS_VW).JOBCODE.Value;
+      
+      If &sPosNbr <> "" Then
+         REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &EmplID | " PosNbr=" | &sPosNbr | " Loc=" | &recCCS_DERIVED_STA.LOCATION.Value | " &sUnionCd=" | &sUnionCd, 0);
+         /* Check if Position currently has Occupies and Show Warning if it does */
+         &sEEOccupy = "";
+         SQLExec("SELECT EMPLID, EMPL_RCD, LOCATION FROM PS_CCS_FSTFLIS_ALL WHERE POSITION_NBR = :1", &sPosNbr, &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc);
+         If &sEEOccupy <> "" Then
+            MessageBox(%MsgStyle_OK, "", 20001, 31, "WARNINGS: This Position currently has Occupies");
+            REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &sEEOccupy, 0);
+            /* Find and Insert Current EE Occupy into CCS_EE_JOB_STF */
+         End-If;
+         /* Insert New Occupy into CCS_EE_JOB_STF */
+         REM &sAllocCat = CCS_GET_ALLOCATION_CAT(&sJobCode);
+         SQLExec(SQL.CCS_JOB_TO_ALC_SQL, &dEFFDT, &sJobCode, &sAllocCat);
+         
+         &oJobTransaction = create CCS_STF_STA:CCS_TRANSACTION();
+         &oJobObj = create CCS_STF_STA:CCS_JOB();
+         &oJobObj.recJob.LOCATION.Value = &recCCS_DERIVED_STA.LOCATION.Value;
+         If Not &oJobObj.FindPosID(0, &sPosNbr) Then
+            &oJobObj.InsertPosID();
+         End-If;
+         /*Set-up to Record the transaction*/
+         &sChgCat = "Employee Placement";
+         &sStaApproval = "S"; /*Saved as Draft*/
+         &sEffStatus = "A";
+         &sChgAction = "S"; /*Save as Draft*/
+         If &sUnionCd = "ATA" Then
+            &sPaygroup = "MMM"
+         Else
+            &sPaygroup = "STF"
+         End-If;
+         &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+         &oJobTransaction.CreateTransactKey(&nSchoolYr, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+         &oJobTransaction.sPositionNbr = &sPosNbr;
+         /*See if there is an existing staffing Job Row for this change*/
+         If &oJobObj.BuildJobTransfer(&nSchoolYr, &sEmplID, &sEmplRcd, &oJobObj.nPosId) Then
+            
+            If &arrTransNumbers.Len > 0 Then
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &arrTransNumbers.Shift();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "T"; /*Transfer to a new position because it has an associate position removal*/
+            Else
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
+            End-If;
+            
+            &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+            &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+            &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
+            
+            
+            /*Existing change in save or pending approval status so just overwrite it*/
+            If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
+               &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+               &oJobObj.UpdateJobChange();
+            Else
+               If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "P" Then
+                  WinMessage("There is already a pending placement for this Employee into Position #: " | &sPosNbr);
+               Else
+                  &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+                  
+                  /*Create a new change*/
+                  &oJobObj.InsertJobChange();
+               End-If;
+            End-If;
+            
+            /*Record the transaction*/
+            &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+            
+         Else
+            /*No existing Job data in CCS_EE_JOB_STF so we'll populte a new record and then insert it */
+            &oJobObj.recJob.LOCATION.Value = &recCCS_DERIVED_STA.LOCATION.Value;
+            &oJobObj.recJob.SETID.Value = "CRCSS";
+            &oJobObj.recJob.PAYGROUP.Value = &sPaygroup;
+            &oJobObj.recJob.EMPL_STATUS.Value = &sEmplStatus;
+            &oJobObj.recJob.CCS_STF_CNTRCT_TYP.Value = &sCntrTyp;
+            &oJobObj.recJob.CCS_STF_ALLOC_CAT.Value = &sAllocCat;
+            &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
+            &oJobObj.recJob.CCS_STF_SURPLUS_PP.Value = &sSurplus;
+            &oJobObj.recJob.LASTUPDDTTM.Value = %Datetime;
+            &oJobObj.recJob.LASTUPDOPRID.Value = %OperatorId;
+            &oJobObj.recJob.CREATEDTTM.Value = %Datetime;
+            &oJobObj.recJob.CREATED_BY.Value = %OperatorId;
+            &oJobObj.recJob.CCS_TRANSACT_Key.Value = &oJobTransaction.sCCS_TRANSACT_KEY;
+            If &arrTransNumbers.Len > 0 Then
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &arrTransNumbers.Shift();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "T"; /*Transfer to a new position because it has an associate position removal*/
+            Else
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
+            End-If;
+            &oJobObj.recJob.EFFDT.Value = &dEFFDT;
+            &oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value = &nSchoolYr;
+            &oJobObj.InsertJobChange();
+         End-If;
+         /*Record the transaction*/
+         &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+         
+         /*Record the Position Occupy Begin and End Dates*/
+         &dOccpyEndDate = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_END_DT.Value;
+         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &dEFFDT, &dOccpyEndDate);
+         
+      End-If;
+      
+   End-For;
+   
+End-If;
+
+MessageBox(%MsgStyle_OK, "", 20001, 32, "Successful Employee Placements have been Saved");
+GetLevel0().Refresh();
+CcsEeTransPageLoad();
