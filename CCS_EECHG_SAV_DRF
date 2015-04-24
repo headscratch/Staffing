@@ -125,6 +125,8 @@ If %Page = "CCS_EECHG_CYR" Then
             If &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S" Then
                &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
                &oJobObj.UpdateJobChange();
+			   /*REcord the transaction number because it will be used for any placements/transfers below*/
+				  &arrTransNumbers.Push(&oJobObj.nCCS_TRANSACT_NBR);
                
             Else
                
@@ -135,6 +137,8 @@ If %Page = "CCS_EECHG_CYR" Then
                   /*Create a new job change*/
                   &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
                   &oJobObj.InsertJobChange();
+				  /*REcord the transaction number because it will be used for any placements/transfers below*/
+				  &arrTransNumbers.Push(&oJobObj.nCCS_TRANSACT_NBR);
                End-If;
             End-If;
          Else
@@ -145,7 +149,7 @@ If %Page = "CCS_EECHG_CYR" Then
                   /*If the job placement is saved as draft or pending or approved do whatever you want to it*/
                   If &oJobObj.recJob.EFFDT.Value >= &dEFFDT Then
                      /*The removal is happening before or on the same date as the placement 
-					   Delete the previous placement*/
+					   Delete the previous placement and don't save this removal*/
                      &oJobObj.DeleteJobChange();
                   Else
                      /*The removal is taking place after the placement*/
@@ -155,6 +159,8 @@ If %Page = "CCS_EECHG_CYR" Then
                      &oJobObj.recJob.EFF_STATUS.Value = &sEffStatus;
                      &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
                      &oJobObj.UpdateJobChange();
+					 /*REcord the transaction number because it will be used for any placements/transfers below*/
+				  &arrTransNumbers.Push(&oJobObj.nCCS_TRANSACT_NBR);
                   End-If;
                Else
                   /*There is already a change that has been completed or finished so 
@@ -166,6 +172,8 @@ If %Page = "CCS_EECHG_CYR" Then
                   &oJobObj.recJob.CCS_STA_APPROVAL.Value = &sStaApproval;
                   &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
                   &oJobObj.InsertJobChange();
+				/*REcord the transaction number because it will be used for any placements/transfers below*/
+				  &arrTransNumbers.Push(&oJobObj.nCCS_TRANSACT_NBR);
                End-If;
                &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
             Else
@@ -198,6 +206,15 @@ If %Page = "CCS_EECHG_CYR" Then
                
             End-If;
          End-If;
+		 
+		 /*Check if there is an outstanding placement*/
+		 if &oJobObj.FindSavedPlacement(&nSchoolYr,&sEmplID,&sLocation) then
+			/*Change the placement to a transfer and tie it to this removal by giving it the 
+			same transaction number*/
+			&oJobObj.recSavedPlacement.CCS_STF_ACTION.Value = "T";
+			&oJobObj.recSavedPlacement.CCS_TRANSACT_NBR.Value = &oJobObj.recJob.CCS_TRANSACT_NBR.Value;
+			&oJobObj.recSavedPlacement.Update();
+		 end-if;
          
       End-If;
    End-For;
