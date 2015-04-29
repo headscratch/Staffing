@@ -1,0 +1,132 @@
+/*  Feb, 2015 –JR  JEB Tech - CCS_STF_ALC_0012_HRO
+     - Staffing Project
+      - This function will add up student entries on the Home Room Grid and put the sum in the correct cell
+		on the Diverse Learning Complexity Grid on the same page.
+	- The cell that gets populated in the DL complexity grid is based on the the *label* of the cell that is being changed
+	  in the HRO Grid. For example if a cell is changed in the Grade 1 Column, thus function will look 
+		for the column labeled Grade 1 in the DL complexity grid and reverse lookup which DL record field that column relates to.
+!!!! In order for this function to work:	
+								-  the fields in the HRO Grid and the DL Complexity Grid must have 
+	 							PAGE FIELD NAMES that are the same as the underlying records field name.
+								-  The labels between the DL Grid and the HRO grid must be the same. Further Split grade numbers
+									on the HRO grid must use H2  and  L2 format with the letter number designation of the split beign the last part of the label.
+								- The function    
+*/
+
+
+
+Component array of string &arrHroColumnLabels;
+Component array of string &arrHroColumnNames;
+Component array of array of string &arrHroRelatedColumnNames;
+Component array of string &arrDlColumnLabels;
+Component array of string &arrDlColumnNames;
+Component array of number &arrHroToDlMapping;
+
+Function UpdateDlGrid()
+   
+   Local Rowset &rsHomeRoomDetail;
+   Local Rowset &rsDLComplexityDetail;
+   
+   Local Record &recHomeRoomDetail;
+   Local Record &recDlComplexityDetail;
+   
+   Local Grid &grdDlComplexityGrid;
+   Local Grid &grdHroGrid;
+   
+   Local GridColumn &grdcDlComplexityColumn;
+   Local GridColumn &grdcHroColumn;
+   
+   Local string &strClassCategory;
+   Local string &sHROFieldName;
+   Local string &sDLFieldName;
+   Local string &sHroColumnLabel;
+   
+   Local number &nI;
+   Local number &nJ;
+   Local number &nDlRowToUpdate;
+   Local number &nStudentCount;
+   Local number &nHroRowCount;
+   Local number &nDlRowCount;
+   Local number &nDlLookup;
+   Local number &nHroLookup;
+   
+   Local array of string &arrRelatedColumns;
+   
+   &arrRelatedColumns = CreateArrayRept("", 0);
+   
+   &rsHomeRoomDetail = GetRowset();
+   &strClassCategory = GetRow().CCS_HRO_DTL.CCS_HRO_CATEGORY.Value;
+   &rsDLComplexityDetail = GetLevel0()(1).GetRowset(Scroll.CCS_DL_ENRL_HRO);
+   
+   
+   &grdDlComplexityGrid = GetGrid(Page.CCS_HRO_ORG, "CCS_DL_ENRL_DTL");
+   &grdHroGrid = GetGrid(Page.CCS_HRO_ORG, "CCS_HRO_DTL");
+   
+   &nDlRowCount = &rsDLComplexityDetail.ActiveRowCount;
+   &nHroRowCount = &rsHomeRoomDetail.ActiveRowCount;
+   
+   &sHROFieldName = GetField().Name;
+   
+   
+   /*Figure out which row needs to get updated
+	Go through each row of the DL Complexity grid and find the one
+that matches the HRO Class category of the field being changed
+ The Class Categories are FMNI, ELL, MID/MOD, Severe*/
+   For &nI = 1 To &nDlRowCount
+      
+      If &rsDLComplexityDetail(&nI).CCS_DL_ENRL_HRO.CCS_DLE_CATEGORY.Value = &strClassCategory Then
+         /*This is the row in the DL Complexity grid that is going to be updated. */
+         &nDlRowToUpdate = &nI;
+         Break;
+      End-If;
+      
+   End-For;
+   
+   /*See if the DL grid has a matching row*/
+   If &nDlRowToUpdate > 0 Then
+      /*Figure out which column in the DL Grid needs to be updated*/
+      
+      &sHroColumnLabel = &grdHroGrid.GetColumn(&sHROFieldName).Label;
+      /*Find out what the index is of the Label from the Hro Label Array*/
+      &nHroLookup = &arrHroColumnLabels.Find(&sHroColumnLabel);
+      
+      /*Check that the home room row being updated matchs a row in the DL complexity grid*/
+      If &nHroLookup > 0 Then
+         /*Take the found index and use it grab the value stored in the Hro to Dl Translate Array*/
+         /*What's stored in that cell is another index value*/
+         &nDlLookup = &arrHroToDlMapping [&nHroLookup];
+         
+         /*Take the new index value and we'll use it lookup which record field it relates to in Dl Recrd*/
+         &sDLFieldName = &arrDlColumnNames [&nDlLookup];
+         
+         /*We'll also find what the related columns are (Like H2 L2 split columns)*/
+         &arrRelatedColumns = &arrHroRelatedColumnNames [&nDlLookup];
+         
+         
+         /*Go through each row of the Home room detail grid with all of the Different home rooms*/
+         /*Sum up all of the students in each home room that have the same Class Category as 
+	the cell that was changed*/
+         For &nI = 1 To &nHroRowCount
+            
+            
+            
+            If &rsHomeRoomDetail(&nI).CCS_HRO_DTL.CCS_HRO_CATEGORY.Value = &strClassCategory Then
+               /*Add up all the student counts for the currently changed field that have the same 
+		HRO Category Class as the field*/
+               /*Go through all the related columns and add them to the total as well*/
+               For &nJ = 1 To &arrRelatedColumns.Len
+                  &nStudentCount = &nStudentCount + &rsHomeRoomDetail(&nI).CCS_HRO_DTL.GetField(@("FIELD." | &arrRelatedColumns [&nJ])).Value;
+               End-For;
+            End-If;
+            
+         End-For;
+         
+         
+         /*Assign the total for the students to the appropriate cell in the DL Complexity grid*/
+         &rsDLComplexityDetail(&nDlRowToUpdate).CCS_DL_ENRL_HRO.GetField(@("FIELD." | &sDLFieldName)).Value = &nStudentCount;
+         
+      End-If;
+   End-If;
+   
+End-Function;
+
