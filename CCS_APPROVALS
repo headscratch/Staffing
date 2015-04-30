@@ -80,6 +80,7 @@ method BuildApprovalList
 	&arrRelatedTransaction[[CCS_TRANSACT_MBR][Rowset Index][Approval Record]]*/
    Local array of array of any &arrRelatedTransaction;
    Local array of number &arrRowsToDelete;
+   Local number &nRowToDelete;
    Local number &i;
    Local number &nArrayLength;
    Local number &nDisplayRow;
@@ -94,14 +95,11 @@ method BuildApprovalList
    Local boolean &bExistingJobData;
    Local boolean &bExistingPosData;
    
-   Local datetime &dtEFFDT;
+   Local float &nRuntime;
    
    
    &rsApprovalList = CreateRowset(Record.CCS_STF_APRV_VW);
    &rsDisplayApprovals = CreateRowset(Record.CCS_DERIVED_APR);
-   
-   
-   
    
    &arrRelatedTransaction = CreateArrayRept(CreateArrayAny(), 0);
    &arrRowsToDelete = CreateArrayRept(0, 0);
@@ -112,19 +110,21 @@ method BuildApprovalList
    
    &nDisplayRow = 1;
    
+   
+   &recPrevTransaction = CreateRecord(Record.CCS_STF_APRV_VW);
+   &rNew_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
+   &recPrev_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
+   &recCurrentRecord = CreateRecord(Record.CCS_STF_APRV_VW);
+   &rActual_APRV_VW = CreateRecord(Record.CCS_DERIVED_APR);
+   
    For &i = 1 To &rsApprovalList.RowCount
       
       &rTempCCS_DERIVED_APR = CreateRecord(Record.CCS_DERIVED_APR);
-      &recPrevTransaction = CreateRecord(Record.CCS_STF_APRV_VW);
-      &rNew_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
-      &recPrev_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
-      &recCurrentRecord = CreateRecord(Record.CCS_STF_APRV_VW);
-      &rActual_APRV_VW = CreateRecord(Record.CCS_DERIVED_APR);
+      
       /*      
       &rNew_APRV_VW = &rsApprovalList(&i).CCS_STF_APRV_VW;
 		*/
       &rsApprovalList(&i).CCS_STF_APRV_VW.CopyFieldsTo(&rNew_APRV_VW);
-      &rsApprovalList(&i).CCS_STF_APRV_VW.CopyFieldsTo(&recCurrentRecord);
       
       
       /*  
@@ -135,7 +135,6 @@ method BuildApprovalList
       /*Set the actual records for this row*/
       If &rNew_APRV_VW.CCS_CHANGE_TYPE.Value = "Job" And
             &rNew_APRV_VW.CCS_STA_APPROVAL.Value = "P" Then
-         
          If &rActual_APRV_VW.EMPLID.Value <> &rNew_APRV_VW.EMPLID.Value Or
                &rActual_APRV_VW.EMPL_RCD.Value <> &rNew_APRV_VW.EMPL_RCD.Value Then
             &rActual_APRV_VW = %This.JobGetActualRow(&rNew_APRV_VW);
@@ -150,7 +149,7 @@ method BuildApprovalList
       End-If;
       
       If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value = "R" Then
-         /*See if the row has been temporarily rejected by the staffing comittee*/
+         /*See if the row has been temporarily rejected by the staffing committee*/
          If None(&rNew_APRV_VW.EMPLID.Value) Then
             &rNew_APRV_VW.EMPLID.Value = 0;
             If &rNew_APRV_VW.POSITION_NBR.Value <> &recPrev_APRV_VW.POSITION_NBR.Value Then
@@ -170,7 +169,6 @@ method BuildApprovalList
          End-If;
          
       Else
-         
          If None(&rNew_APRV_VW.EMPLID.Value) Then
             &rNew_APRV_VW.EMPLID.Value = 0;
             If &rNew_APRV_VW.POSITION_NBR.Value <> &recPrev_APRV_VW.POSITION_NBR.Value Then
@@ -181,7 +179,6 @@ method BuildApprovalList
                /*No previous row was found so we'll use the actual row*/
                &rActual_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
             End-If;
-            
          Else
             
             /*Populate the array of Emplids the Combined FTE For that Emplid and the positions
@@ -192,28 +189,21 @@ method BuildApprovalList
                &aEMPLID.Push(CreateArrayAny(&rNew_APRV_VW.EMPLID.Value));
                &nEMPLIDIndex = &aEMPLID.Len;
                &aEMPLID [&nEMPLIDIndex].Push(&rNew_APRV_VW.CCS_COMBINED_FTE.Value);
+			else
+				/*Pull out the stored Combined FTE for the Employee*/
+				If All(&rNew_APRV_VW.EMPLID.Value) Then
+				   &rNew_APRV_VW.CCS_COMBINED_FTE.Value = &aEMPLID [&nEMPLIDIndex][2];
+				End-If;
             End-If;
             
             &aEMPLID [&nEMPLIDIndex].Push(&rNew_APRV_VW.POSITION_NBR.Value);
             &nArrayLength = &aEMPLID [&nEMPLIDIndex].Len;
-            <*
-            If &rNew_APRV_VW.CCS_STF_ACTION.Value = "T" Then
-               /*This is a transfer so we need to get the last Position from this EMPLID was associated with*/
-               &recPrev_APRV_VW.POSITION_NBR.Value = &aEMPLID [&nEMPLIDIndex][&nArrayLength - 1];
-               &recPrev_APRV_VW.EMPLID.Value = &rNew_APRV_VW.EMPLID.Value;
-               &recPrev_APRV_VW = %This.GetPreviousPosInfo(&recPrev_APRV_VW);
-            Else
-             *>
+            
             If &recPrev_APRV_VW.POSITION_NBR.Value <> &rNew_APRV_VW.POSITION_NBR.Value Then
                &recPrev_APRV_VW = %This.GetPreviousPosInfo(&rNew_APRV_VW);
             End-If;
-            <*
-            End-If;
-            *>
-            /*Pull out the stored Combined FTE for the Employee*/
-            If All(&rNew_APRV_VW.EMPLID.Value) Then
-               &rNew_APRV_VW.CCS_COMBINED_FTE.Value = &aEMPLID [&nEMPLIDIndex][2];
-            End-If;
+            
+
          End-If;
          
          &rNew_APRV_VW = %This.GetCurrentPosInfo(&rNew_APRV_VW, &rActual_APRV_VW);
@@ -231,9 +221,6 @@ method BuildApprovalList
          &rActual_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
       End-If;
       
-      
-      
-      
       If &rNew_APRV_VW.CCS_CHANGE_TYPE.Value = "Job" And
             &rNew_APRV_VW.CCS_STF_ACTION.Value = "P" Then /*Employee Placement*/
          &recPrev_APRV_VW.FTE.Value = 0;
@@ -242,14 +229,20 @@ method BuildApprovalList
       End-If;
       
       
-      
+      &rNew_APRV_VW.CopyFieldsTo(&recCurrentRecord);
       /*See if another transaction with a related 
 		 transaction number has already been processed*/
+      
       &nRelTranIndex = &arrRelatedTransaction.Find(&recCurrentRecord.CCS_TRANSACT_NBR.Value);
       If &nRelTranIndex > 0 Then
          &arrRelatedTransaction [&nRelTranIndex][3].CopyFieldsTo(&recPrevTransaction);
-         If &recCurrentRecord.CCS_STF_ACTION.Value = "T" Then
+         
+         
+         If &recCurrentRecord.CCS_STF_ACTION.Value = "T" Or
+               &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
+            
             If &recPrevTransaction.CCS_STF_ACTION.Value = "R" Then
+               
                &recPrevTransaction.CopyFieldsTo(&recPrev_APRV_VW);
                &recPrevTransaction.CopyFieldsTo(&recCurrentRecord);
                &recCurrentRecord.CCS_STF_ACTION.Value = "T";
@@ -257,12 +250,17 @@ method BuildApprovalList
                If &recPrevTransaction.CCS_STA_APPROVAL.Value = "P" Then
                   &arrRowsToDelete.Push(&arrRelatedTransaction [&nRelTranIndex][2]);
                End-If;
+               
             End-If;
          End-If;
          
          
          If &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
-            If &recPrevTransaction.CCS_STF_ACTION.Value = "T" Then
+            If &recPrevTransaction.CCS_STF_ACTION.Value = "T" Or
+                  
+                  
+                  &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
+               
                &recCurrentRecord.CopyFieldsTo(&recPrev_APRV_VW);
                &recPrevTransaction.CopyFieldsTo(&recCurrentRecord);
                &recPrevTransaction.CopyFieldsTo(&rNew_APRV_VW);
@@ -451,11 +449,14 @@ method BuildApprovalList
 */
    End-For;
    &rsDisplayApprovals.DeleteRow(&nDisplayRow);
-   
-   &i = 0;
-   While &arrRowsToDelete.Next(&i)
-      &rsDisplayApprovals.DeleteRow(&arrRowsToDelete [&i]);
+   Local time &start;
+   &start = %PerfTime;
+   /*Delete the extra rows starting with the ones at the end*/
+   While &arrRowsToDelete.Len > 0
+      &nRowToDelete = &arrRowsToDelete.Pop();
+      &rsDisplayApprovals.DeleteRow(&nRowToDelete);
    End-While;
+   
    Return &rsDisplayApprovals
 end-method;
 
@@ -561,7 +562,8 @@ Things like the position fte, or who is currently occupying the position*/
          &recApprovalRecord.FTE.Value = &recActualRecord.FTE.Value;
          &recApprovalRecord.JOBCODE.Value = &recActualRecord.JOBCODE.Value;
          &recApprovalRecord.CCS_CHANGE_TYPE.Value = "Position";
- */
+		*/
+         
       Else
          &rApprvlRecord.CopyFieldsTo(&recApprovalRecord);
       End-If;
@@ -666,6 +668,7 @@ method GetCurrentPosInfo
    
    Local Record &recTempCurRow;
    Local Record &recTempEmplid0;
+   Local Record &recActualPosInfo;
    Local number &nPosIndex;
    Local number &nEmplIdIndex;
    Local number &nEmplArrayIndex;
@@ -676,6 +679,7 @@ method GetCurrentPosInfo
    
    &recTempCurRow = CreateRecord(Record.CCS_STF_APRV_VW);
    &recTempEmplid0 = CreateRecord(Record.CCS_STF_APRV_VW);
+   &recActualPosInfo = CreateRecord(Record.CCS_STF_APRV_VW);
    
    &recCurRow.CopyFieldsTo(&recTempCurRow);
    
@@ -686,7 +690,7 @@ method GetCurrentPosInfo
       &nPosIndex = &aPOSITION_NBR.Len;
       /*See if the current row has Pos information*/
       If None(&recCurRow.FTE.Value) Then
-         /*If it doesn't see if it's related to the current actual row */
+         /*If it doesn't, see if it's related to the current actual row */
          If &recActualRow.POSITION_NBR.Value <> &recCurRow.POSITION_NBR.Value Then
             
             /*Get the actual position data for this row*/
@@ -700,7 +704,17 @@ method GetCurrentPosInfo
             &recTempEmplid0.FTE.Value = &recActualRow.FTE.Value;
             &recTempEmplid0.CCS_COMBINED_FTE.Value = 0;
             
-         End-If
+            /*It is related to the current actual pos row then populate it's pos data*/
+         Else
+            If &recActualRow.FTE.Value = 0 Then
+               /*Although there is an actual record it doesn't have any pos info*/
+               &recActualPosInfo = %This.PosGetActualRow(&recCurRow);
+               
+               &recCurRow.FTE.Value = &recActualPosInfo.FTE.Value;
+            Else
+               &recCurRow.FTE.Value = &recActualRow.FTE.Value;
+            End-If;
+         End-If;
       End-If;
       /*Copy the Actual Position Info into the EMPLID 0 row*/
       &aPOSITION_NBR [&nPosIndex].Push(0);
