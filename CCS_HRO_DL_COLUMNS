@@ -97,6 +97,7 @@ Function BuildDlHroArrays()
             End-If;
             
          Else
+		          /*Figure out if this is a split class*/
             If Find("L", &sHroColumnLabel) > 0 Or
                   Find("H", &sHroColumnLabel) > 0 Then
                /*If it is a split class so it's got a label like 1/2 L2 we are 
