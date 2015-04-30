@@ -70,8 +70,8 @@ Function UpdateDlGrid()
    
    /*Figure out which row needs to get updated
 	Go through each row of the DL Complexity grid and find the one
-that matches the HRO Class category of the field being changed
- The Class Categories are FMNI, ELL, MID/MOD, Severe*/
+	that matches the HRO Class category of the field being changed
+	The Class Categories are FMNI, ELL, MID/MOD, Severe*/
    For &nI = 1 To &nDlRowCount
       
       If &rsDLComplexityDetail(&nI).CCS_DL_ENRL_HRO.CCS_DLE_CATEGORY.Value = &strClassCategory Then
@@ -90,7 +90,7 @@ that matches the HRO Class category of the field being changed
       /*Find out what the index is of the Label from the Hro Label Array*/
       &nHroLookup = &arrHroColumnLabels.Find(&sHroColumnLabel);
       
-      /*Check that the home room row being updated matchs a row in the DL complexity grid*/
+      /*Check that the home room row being updated matches a row in the DL complexity grid*/
       If &nHroLookup > 0 Then
          /*Take the found index and use it grab the value stored in the Hro to Dl Translate Array*/
          /*What's stored in that cell is another index value*/
