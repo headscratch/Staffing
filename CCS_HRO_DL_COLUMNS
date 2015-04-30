@@ -1,0 +1,153 @@
+/*  Feb, 2015 –JR  JEB Tech - CCS_STF_ALC_0012_HRO
+     - Staffing Project
+      - This function is for populating a series of arrays that will be used on the 
+		HRO page to translate between the Home Room organization data and the Diverse
+		Learning Data.
+
+!!!! In order for this function to work:	
+								-  the fields in the HRO Grid and the DL Complexity Grid must have 
+	 							PAGE FIELD NAMES that are the same as the underlying records field name.
+								-  The labels between the DL Grid and the HRO grid must be the same. Further Split grade numbers
+									on the HRO grid must use H2  and  L2 format with the letter number designation of the split beign the last part of the label. 
+								- Special Ed columns on the HRO Grid must have "SPED" in the label
+*/
+
+Component array of string &arrHroColumnLabels;
+Component array of string &arrHroColumnNames;
+Component array of array of string &arrHroRelatedColumnNames;
+Component array of string &arrDlColumnLabels;
+Component array of string &arrDlColumnNames;
+Component array of number &arrHroToDlMapping;
+
+
+Function BuildDlHroArrays()
+   
+   
+   Local Grid &grdDlComplexityGrid;
+   Local Grid &grdHroGrid;
+   
+   Local GridColumn &grdcDlComplexityColumn;
+   Local GridColumn &grdcHroColumn;
+   
+   Local string &sHroColumnLabel;
+   Local string &sDlColumnLabel;
+   Local string &sHroSplitGrade;
+   Local string &sDLFieldName;
+   Local string &sHROFieldName;
+   Local string &sHroSpedLabel;
+   
+   
+   Local number &nI;
+   
+   Local number &nDlColumnCount;
+   Local number &nHroColumnCount;
+   Local number &nHroToDlTranslateIndex;
+   Local number &nHroRelatedColumnsIndex;
+   Local number &nHroRegularColumns;
+   
+   
+   
+   &arrHroColumnLabels = CreateArrayRept("", 0);
+   &arrHroColumnNames = CreateArrayRept("", 0);
+   &arrHroRelatedColumnNames = CreateArrayRept(CreateArrayRept("", 0), 0);
+   &arrDlColumnLabels = CreateArrayRept("", 0);
+   &arrDlColumnNames = CreateArrayRept("", 0);
+   &arrHroToDlMapping = CreateArrayRept(0, 0);
+   
+   &grdDlComplexityGrid = GetGrid(Page.CCS_HRO_ORG, "CCS_DL_ENRL_DTL");
+   &grdHroGrid = GetGrid(Page.CCS_HRO_ORG, "CCS_HRO_DTL");
+   
+   &sHroSpedLabel = "SPED";
+   
+   &nDlColumnCount = 20;
+   &nHroColumnCount = 25;
+   &nHroRegularColumns = 20;
+   
+   For &nI = 1 To &nDlColumnCount
+      try
+         If &nI < 10 Then
+            &sDLFieldName = "CCS_DLE_COL_0" | &nI | "_PRJ";
+         Else
+            &sDLFieldName = "CCS_DLE_COL_" | &nI | "_PRJ";
+         End-If;
+         
+         &arrDlColumnLabels [&nI] = &grdDlComplexityGrid.GetColumn(&sDLFieldName).Label;
+         &arrDlColumnNames [&nI] = &sDLFieldName;
+         
+         /*Catch any exceptions thrown from a Page field name that doesn't exist*/
+      catch Exception &err1
+      end-try;
+   End-For;
+   
+   For &nI = 1 To &nHroColumnCount
+      try
+         If &nI < 10 Then
+            &sHROFieldName = "CCS_HRO_COL_0" | &nI | "_PRJ";
+         Else
+            &sHROFieldName = "CCS_HRO_COL_" | &nI | "_PRJ";
+         End-If;
+         
+         /*Figure out if this is a split class*/
+         &sHroColumnLabel = &grdHroGrid.GetColumn(&sHROFieldName).Label;
+         /*See if we are into the SPED columns*/
+         If &nI > &nHroRegularColumns Then
+            &nHroToDlTranslateIndex = &arrDlColumnLabels.Find(&sHroSpedLabel);
+            If &nHroToDlTranslateIndex > 0 Then
+               &arrHroToDlMapping [&nI] = &nHroToDlTranslateIndex;
+            End-If;
+            
+         Else
+            If Find("L", &sHroColumnLabel) > 0 Or
+                  Find("H", &sHroColumnLabel) > 0 Then
+               /*If it is a split class so it's got a label like 1/2 L2 we are 
+			going to take the last character of the label that tells us what grade it is
+			So for this we'll cut off '1/2 L' and just leave the '2' */
+               &sHroSplitGrade = Right(&sHroColumnLabel, 1);
+               
+               /*Find out what the array index is of the element in Diverse Learning Array 
+				That has the same Label, we'll record this in the translate array*/
+               &nHroToDlTranslateIndex = &arrDlColumnLabels.Find(&sHroSplitGrade);
+               If &nHroToDlTranslateIndex > 0 Then
+                  &arrHroToDlMapping [&nI] = &nHroToDlTranslateIndex;
+               End-If;
+               
+            Else
+               
+               /*Find out what the array index is of the element in Diverse Learning Array 
+				That has the same Label, we'll record this in the translate array*/
+               &nHroToDlTranslateIndex = &arrDlColumnLabels.Find(&sHroColumnLabel);
+               
+               If &nHroToDlTranslateIndex > 0 Then
+                  &arrHroToDlMapping [&nI] = &nHroToDlTranslateIndex;
+               End-If;
+               
+            End-If;
+         End-If;
+         /*Build our two lookup tables*/
+         &arrHroColumnLabels [&nI] = &sHroColumnLabel;
+         &arrHroColumnNames [&nI] = &sHROFieldName;
+         
+         /*Build the related columns column array*/
+         /*this is for tying together splits and the actual grade they relate to*/
+         /*It will be indexed based on the &arrHroToDlMapping array*/
+         
+         
+         /*If an element in the Related Columns Array doesn't exist yet at this
+		Index we'll create one*/
+         If &nHroToDlTranslateIndex > &arrHroRelatedColumnNames.Len Then
+            &arrHroRelatedColumnNames [&nHroToDlTranslateIndex] = CreateArrayRept("", 0)
+         End-If;
+         
+         
+         If &nHroToDlTranslateIndex > 0 Then
+            &arrHroRelatedColumnNames [&nHroToDlTranslateIndex].Push(&sHROFieldName);
+         End-If;
+         
+         
+         /*Catch any exceptions thrown from a Page field name that doesn't exist*/
+      catch Exception &err2
+      end-try;
+   End-For;
+   
+End-Function;
+
