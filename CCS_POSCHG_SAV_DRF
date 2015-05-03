@@ -1,0 +1,146 @@
+Declare Function CCS_FUT_YR_STAFF PeopleCode CCS_FUNCLIB_STA.CCS_FUT_YR_STAFF FieldFormula;
+Declare Function CCS_STF_EE_ABSENCE PeopleCode CCS_FUNCLIB_STA.CCS_STF_EE_ABSENCE FieldFormula;
+Declare Function CCS_STF_EE_OCPY_DT PeopleCode CCS_FUNCLIB_STA.CCS_STF_EE_OCPY_DT FieldFormula;
+
+Component Rowset &rs0, &rs1, &rs2;
+Component Record &Rec, &recCCS_DERIVED_STA, &recCCS_DERIVED_STA_0;
+Component number &numSchoolYr, &FTE_Orig, &StdHours_Orig;
+Component number &FTE_New, &StdHours_New;
+Component string &StaffYearStatus, &Union_cd, &PosNbr, &Location, &sPosUnionCd;
+Component string &EFFDT_PosChg, &dtOcpyBgnDt_Orig, &dtOcpyEndDt_Orig;
+Component array of array of any &aEE_OCPY_DT;
+Component string &sDept_Orig, &sPosPool_Orig;
+Component string &EmplIDSave;
+Component number &EmplRcdSave;
+
+Local string &EmplID, &sPosStatus, &sHideGrid;
+Local number &EmplRcd, &i;
+Local SQL &SQL;
+
+/*============================================================================
+  Code for Position Change Page Activate
+  Description: 
+  - Principals access this page by clicking on the Update Assignments/Position button on Staff List
+    It will be loaded as Modal component, display 1 page tab Pos Change for Fut Yr only
+    Save as Draft button will be enabled 
+  - HR access this page by Menu and Search by Position Nbr
+    It will be loaded as normal component
+    Save as Approved button will be enabled
+ ============================================================================*/
+
+&PosNbr = GetField(CCS_POSPROF_SRC.POSITION_NBR).Value;
+&Location = GetField(CCS_FPOS_CONSDL.LOCATION).Value;
+&sPosStatus = GetField(CCS_FPOS_CONSDL.EFF_STATUS).Value;
+&sPosUnionCd = GetField(CCS_FPOS_CONSDL.UNION_CD).Value;
+
+rem WinMessage("PAGE.CCS_POSCHG_FYR_CER.Activate 1  " | "&PosNbr=" | &PosNbr | "&Location=" | &Location | "&sPosStatus=" | &sPosStatus, 0);
+
+/* Manage Removed position in Staffing */
+CCS_DERIVED_STA.CCS_LBL_POS_REMOVE.Visible = True;
+CCS_DERIVED_STA.CCS_POSCHG_REMOVE.Visible = True;
+CCS_DERIVED_STA.CCS_POSCHG_SAV_APR.Visible = True;
+CCS_DERIVED_STA.CCS_POSCHG_SAV_DRF.Visible = True;
+
+If &sPosStatus = "A" Then
+   CCS_DERIVED_STA.CCS_LBL_POS_REMOVE.Visible = False;
+Else
+   CCS_DERIVED_STA.CCS_POSCHG_REMOVE.Visible = False;
+   CCS_DERIVED_STA.CCS_POSCHG_SAV_APR.Visible = False;
+   CCS_DERIVED_STA.CCS_POSCHG_SAV_DRF.Visible = False;
+End-If;
+
+&rs0 = GetLevel0();
+&recCCS_DERIVED_STA_0 = &rs0(1).GetRecord(Record.CCS_DERIVED_STA);
+
+/* Call Function to Get Future Year from STFCNTL_HDR */
+CCS_FUT_YR_STAFF(&numSchoolYr, &StaffYearStatus);
+
+/* Display Current FTE & Std Hours, Dept, Pos Pool as Original values */
+&Union_cd = GetField(CCS_FPOS_CONSDL.UNION_CD).Value;
+&FTE_Orig = GetField(CCS_FPOS_CONSDL.FTE).Value;
+&StdHours_Orig = GetField(CCS_FPOS_CONSDL.STD_HOURS).Value;
+&recCCS_DERIVED_STA_0.CCS_POSCHG_FTE.Value = &FTE_Orig;
+&recCCS_DERIVED_STA_0.CCS_POSCHG_STD_HRS.Value = &StdHours_Orig;
+&sDept_Orig = GetField(CCS_FPOS_CONSDL.DEPTID).Value;
+&sPosPool_Orig = GetField(CCS_FPOS_CONSDL.POSITION_POOL_ID).Value;
+&recCCS_DERIVED_STA_0.DEPTID.Value = &sDept_Orig;
+&recCCS_DERIVED_STA_0.POSITION_POOL_ID.Value = &sPosPool_Orig;
+
+/* Show only 4 decimal places for FTE, 6 by default  */
+&recCCS_DERIVED_STA_0.CCS_POSCHG_FTE.DecimalPosition = 4;
+
+/* Display page differently for HR versus Principals */
+If IsModalComponent() Then
+   &recCCS_DERIVED_STA_0.CCS_POSCHG_SAV_APR.Visible = False;
+   &recCCS_DERIVED_STA_0.CCS_HR_COMMENTS.Visible = False;
+   &recCCS_DERIVED_STA_0.DEPTID.DisplayOnly = True;
+   &recCCS_DERIVED_STA_0.POSITION_POOL_ID.DisplayOnly = True;
+Else
+   &recCCS_DERIVED_STA_0.CCS_POSCHG_SAV_DRF.Visible = False;
+   &recCCS_DERIVED_STA_0.CCS_POSCHG_RETURN.Visible = False;
+End-If;
+
+/* Display Rationale for Change - Support Staff only */
+If &sPosUnionCd <> "STF" Then
+   CCS_DERIVED_STA.CCS_POS_RATNL_GRP.Visible = False;
+End-If;
+
+/*============================================================================
+  Code for Grid Position Occupied By CCS_FJOB_CONSDL
+  Description:  To load all derived columns in Grid 
+ ============================================================================*/
+&rs1 = &rs0(1).GetRowset(Scroll.CCS_FJOB_CONSDL);
+&rs1.Flush();
+&rs1.Select(Record.CCS_FJOB_CONSDL, "WHERE POSITION_NBR = :1 AND NOT(CCS_STF_SURPLUS_PP = 'P' and CCS_STA_APPROVAL IN('A','P','C','F'))", &PosNbr);
+
+&aEE_OCPY_DT = CreateArrayRept(CreateArrayAny(), 0);
+
+&sHideGrid = "N";
+&EmplIDSave = "";
+&EmplRcdSave = 0;
+
+For &i = 1 To &rs1.ActiveRowCount
+   
+   &Rec = &rs1(&i).CCS_FJOB_CONSDL;
+   &EmplID = &Rec.EMPLID.Value;
+   &EmplRcd = &Rec.EMPL_RCD.Value;
+   /* Call Function to Get EE Absences */
+   CCS_STF_EE_ABSENCE(&StaffYearStatus, &EmplID, &EmplRcd, &Bgn_Dt, &End_Dt, &Abs_Descr, &Duration_Days);
+   /* Display Absences */
+   &recCCS_DERIVED_STA = &rs1(&i).GetRecord(Record.CCS_DERIVED_STA);
+   &recCCS_DERIVED_STA.BGN_DT.Value = &Bgn_Dt;
+   &recCCS_DERIVED_STA.END_DT.Value = &End_Dt;
+   &recCCS_DERIVED_STA.DESCR.Value = &Abs_Descr;
+   
+   /* Call Function to Get EE Occupy Dates */
+   &dtOcpyBgnDt_Orig = "";
+   &dtOcpyEndDt_Orig = "";
+   CCS_STF_EE_OCPY_DT(&PosNbr, &EmplID, &EmplRcd, &dtOcpyBgnDt_Orig, &dtOcpyEndDt_Orig);
+   /* Display Occupy Begin & End dates as Original values and Save them to Array  */
+   If &dtOcpyEndDt_Orig = "9999-01-01" Then
+      &dtOcpyEndDt_Orig = ""
+   End-If;
+   &recCCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value = &dtOcpyBgnDt_Orig;
+   &recCCS_DERIVED_STA.CCS_OCPY_END_DT.Value = &dtOcpyEndDt_Orig;
+   &aEE_OCPY_DT.Push(CreateArrayAny(&i, &EmplID, &dtOcpyBgnDt_Orig, &dtOcpyEndDt_Orig));
+   
+   REM WinMessage("PAGE.CCS_POSCHG_FYR_CER.Activate 1 " | "Array 1=" | &aEE_OCPY_DT [1][1] | " Array 2=" | &aEE_OCPY_DT [1][2] | " Array 3=" | &aEE_OCPY_DT [1][3], 0);
+   If &i = 1 And
+         &EmplID = "" Then
+      /* Grid Position Occupied is empty, hide it later */
+      &sHideGrid = "Y";
+   Else
+      &EmplIDSave = &EmplID;
+      &EmplRcdSave = &EmplRcd;
+   End-If;
+End-For;
+
+/*============================================================================
+  Code 
+  Description: Hide Position Occupied Grid when it is empty
+ ============================================================================*/
+
+If &sHideGrid = "Y" Then
+   REM WinMessage("PAGE.CCS_POSCHG_CYR_CER.Activate 4  HIDE GRIDS " | "&PosNbr=" | &PosNbr | "&Location=" | &Location | "&sPosStatus=" | &sPosStatus, 0);
+   &rs1.HideAllRows();
+End-If;
