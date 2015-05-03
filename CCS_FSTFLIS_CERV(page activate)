@@ -1,0 +1,293 @@
+Declare Function CCS_FUT_YR_STAFF PeopleCode CCS_FUNCLIB_STA.CCS_FUT_YR_STAFF FieldFormula;
+Declare Function CCS_ASSIGNMENT_LIS PeopleCode CCS_FUNCLIB_STA.CCS_ASSIGNMENT_LIS FieldFormula;
+
+Global Record &recCcsBalLisWrk;
+
+
+Component Row &rowSTFLIS_SRC, &rowSTFLIS_ALL;
+Component Record &recCCS_DERIVED_STA, &recCCS_DERIVED_STA_0;
+Component number &numSchoolYr, &nSchoolYr;
+Component string &StaffYearStatus, &strLocDescr;
+Component string &sUnionCode;
+Component string &strLocationCd;
+
+Local Rowset &rs0, &rs1, &rs2;
+
+Local Record &recCcsFstflisVac;
+
+Local SQL &sqlVacancies;
+Local SQL &SQL;
+
+Local array of string &arrPosOccupies;
+Local array of array of any &arrVacPositions;
+
+Local string &EmplID, &PosNbr, &strSchoolYr, &strJobcode;
+Local string &Asg_List, &Asg_01, &Asg_02, &Asg_03, &Asg_04, &Asg_05, &Asg_06, &Asg_07, &Delim;
+Local string &sPrioirtyPlacement;
+Local string &sEffStatus;
+Local string &sPosEffStatus;
+Local string &sPositionNbr;
+Local string &sEmplId;
+
+Local boolean &bInsertRec;
+
+Local number &numSchoolYr, &numEmplID, &numPosNbr, &sumFTE, &cntPosOcpy, &LineNo;
+Local number &nPosIndex;
+Local number &nI;
+
+
+
+/*============================================================================
+  Code for Page CCS_CSTFLIS_CERS.Activate 
+  Description: Activate Page CurYr Teach Staff List Absence  
+ ============================================================================*/
+
+&rs0 = GetLevel0();
+&strLocationCd = GetField(CCS_FSTFLIS_SRC.LOCATION).Value;
+&strLocDescr = GetField(CCS_FSTFLIS_SRC.DESCR).Value;
+&strJobcode = &rs0(1).CCS_BAL_LIS_WRK.JOBCODE.Value;
+
+&rs1 = &rs0(1).GetRowset(Scroll.CCS_FCERTVAC_VW);
+&rs1.Flush();
+
+&recCcsFstflisVac = CreateRecord(Record.CCS_FCERTVAC_VW);
+
+&arrPosOccupies = CreateArrayRept("", 0);
+&arrVacPositions = CreateArrayRept(CreateArrayAny(), 0);
+
+If &strJobcode = "" And
+      All(&recCcsBalLisWrk) Then
+   /*If the Jobcode wasn't passed in through the work record CCS_BAL_LIS_WRK check if it was passed through the search record*/
+   &strJobcode = &recCcsBalLisWrk.JOBCODE.Value;
+   
+End-If;
+
+/*Reset the global record because the page transfer is done*/
+&recCcsBalLisWrk = CreateRecord(Record.CCS_BAL_LIS_WRK);
+
+If &strJobcode <> "" Then
+   &sqlVacancies = CreateSQL("%SelectAll(CCS_FSTFLIS_VAC) WHERE LOCATION = :1 AND UNION_CD = 'ATA' AND STD_HOURS > 0.01 AND JOBCODE = :2", &strLocationCd, &strJobcode);
+Else
+   &sqlVacancies = CreateSQL("%SelectAll(CCS_FSTFLIS_VAC) WHERE LOCATION = :1 AND UNION_CD = 'ATA' AND STD_HOURS > 0.01 ", &strLocationCd);
+   
+End-If;
+
+While &sqlVacancies.Fetch(&recCcsFstflisVac)
+   &bInsertRec = False;
+   
+   &sPrioirtyPlacement = &recCcsFstflisVac.CCS_STF_SURPLUS_PP.Value;
+   &sEffStatus = &recCcsFstflisVac.EFF_STATUS.Value;
+   &sPositionNbr = &recCcsFstflisVac.POSITION_NBR.Value;
+   &sEmplId = &recCcsFstflisVac.EMPLID.Value;
+   &sPosEffStatus = &recCcsFstflisVac.CCS_POS_EFF_STATUS.Value;
+   
+   &nPosIndex = &arrPosOccupies.Find(&sPositionNbr);
+   If &nPosIndex = 0 Then
+      If &sEmplId = "" Then
+         &bInsertRec = True;
+         
+      Else
+         If &sEffStatus = "I" Or
+               &sPrioirtyPlacement = "P" Then
+            &bInsertRec = True;
+            
+         Else
+            &bInsertRec = False;
+            &arrPosOccupies.Push(&sPositionNbr);
+         End-If;
+      End-If;
+   Else
+      /*Pos has an occupy so don't add it to the Vacancy Rowset*/
+      &bInsertRec = False;
+   End-If;
+   
+   /*Final Check, see if the Position has been deleted, if it has don't display it in the vacancy list*/
+   If &sPosEffStatus = "I" Then
+      &arrPosOccupies.Push(&sPositionNbr);
+      &bInsertRec = False;
+   End-If;
+   
+   If &bInsertRec = True Then
+      /*This is an actual Position with a vacancy*/
+      &arrVacPositions.Push(CreateArrayAny(&sPositionNbr, &recCcsFstflisVac));
+   Else
+      /*Check the existing positions that have been marked as vacant*/
+      /*If we find one we need to delete it because it was occupied by this person*/
+      &nPosIndex = &arrVacPositions.Find(&sPositionNbr);
+      If &nPosIndex > 0 Then
+         &arrVacPositions [&nPosIndex][1] = "-1";
+      End-If;
+   End-If;
+   &recCcsFstflisVac = CreateRecord(Record.CCS_FSTFLIS_VAC);
+End-While;
+&sqlVacancies.Close();
+
+
+&nI = 0;
+While &arrVacPositions.Next(&nI)
+   If &arrVacPositions [&nI][1] <> "-1" Then
+      &arrVacPositions [&nI][2].CopyFieldsTo(&rs1(1).CCS_FCERTVAC_VW);
+      &rs1.InsertRow(0);
+   End-If;
+End-While;
+
+&rs1.DeleteRow(1);
+
+&rs1.ChangeOnInit = False;
+&Refreshed = True;
+
+&rs2 = &rs0(1).GetRowset(Scroll.CCS_FEE_ABS_EVT);
+&rs2.Flush();
+&rs2.Select(Record.CCS_FEE_ABS_EVT, "WHERE LOCATION = :1 AND PAYGROUP IN ('MMM','SUB')", &strLocationCd);
+&rs2.ChangeOnInit = False;
+&Refreshed = True;
+&rs2.Sort(PERSONAL_DATA.LAST_NAME, "A");
+
+/* Call Function to Get Future Year from STFCNTL_HDR */
+CCS_FUT_YR_STAFF(&numSchoolYr, &StaffYearStatus);
+&nSchoolYr = &numSchoolYr;
+
+/* Assign Union Code */
+&sUnionCode = "ATA";
+
+REM WinMessage("PAGE.CCS_CSTFLIS_CERS.Activate 1  " | "Location=" | &strLocationCd, 0);
+
+/*============================================================================
+  Code for Grid CCS_CSTFLIS_ALL
+  Description:  * Load all derived columns in Position Vacant Grid:
+                - Hyper Link to Position Profile (Pos Number)
+                - Assignment List
+                * Show only 4 decimal places for FTE, 6 by default
+ ============================================================================*/
+
+For &i = 1 To &rs1.ActiveRowCount
+   
+   &Rec = &rs1(&i).CCS_FCERTVAC_VW;
+   &PosNbr = &Rec.POSITION_NBR.Value;
+   &numPosNbr = Value(LTrim(&PosNbr));
+   &Rec.FTE.DecimalPosition = 4;
+   &recCCS_DERIVED_STA = &rs1(&i).GetRecord(Record.CCS_DERIVED_STA);
+   /* Make Hyperlink Text to EmplID and Position Nbr                         */
+   &PosLinkName = &Rec.POSITION_NBR.Value;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* This link will transfer you to a different component              */
+   /*   so provide the key fields necessary to get to the               */
+   /*   desired record on the new component                             */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   
+   &Key2Value = &Rec.POSITION_NBR.Value;
+   &PosProfile_Param = "&POSITION_NBR=" | &Key2Value;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Build the Transfer URL to EE Profile page and Pos Profile page    */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &PosProfileURL = GenerateComponentPortalURL(%Portal, %Node, MenuName."ROLE_MANAGER", %Market, Component.CCS_POSPROFILE_PRN, Page.CCS_POSPROFILE_FYR, "U") | &PosProfile_Param;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Create the desired Hover Text for this row                        */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &PosProfile_Hover = "Pos_Profile " | &PosLinkName;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Now create the hyperlink object (Assigning the                    */
+   /*   Hyperlink Text, Hover Over Text, and the URL                    */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &PosProfile_HTML_Text = GetHTMLText(HTML.CCS_HTML_POSPROFILE, &PosLinkName, &PosProfile_Hover, &PosProfileURL);
+   &rs1(&i).CCS_DERIVED_STA.CCS_STFLIS_VIEWPOS.Value = &PosProfile_HTML_Text;
+   REM WinMessage("PAGE.CCS_CSTFLIS_CERV.Activate 4 " | "&EmplID=" | &EmplID | "&PosNbr=" | &PosNbr, 0);
+   
+   /* Call Function to Get Assignment List by Position Nbr, using Delimiter */
+   CCS_ASSIGNMENT_LIS(&StaffYearStatus, &PosNbr, &Asg_01, &Asg_02, &Asg_03, &Asg_04, &Asg_05, &Asg_06, &Asg_07, &Asg_List);
+   &recCCS_DERIVED_STA.CCS_STF_ASGN_LIST.Value = &Asg_List;
+   
+End-For;
+
+/* DO NOT display Removed Position with STF_POS with EffStatus = "I" */
+<*
+For &i = &rs1.ActiveRowCount To 1 Step - 1
+   &Rec = &rs1(&i).CCS_FCERTVAC_VW;
+   &PosNbr = &Rec.POSITION_NBR.Value;
+   &numPosNbr = Value(LTrim(&PosNbr));
+   &sTransactNbr = "";
+   SQLExec(SQL.CCS_STF_POS_REMOVE, &PosNbr, &numSchoolYr, &sTransactNbr);
+   REM WinMessage("PAGE.CCS_FSTFLIS_CERV.Activate 4 " | "&sTransactNbr=" | &sTransactNbr | "&PosNbr=" | &PosNbr | "&SchoolYr=" | &numSchoolYr | " &I=" | &i, 0);
+   If &sTransactNbr <> "" Then
+      &rs1(&i).Visible = False;
+   End-If;
+End-For;
+*>
+/*============================================================================
+  Code for Grid CCS_FEE_ABS_EVT
+  Description:  * Load all derived columns in Positon from Absences Grid:
+                - Hyper Link to EE Profile (EE Number)
+                - Hyper Link to Position Profile (Pos Number)
+                - Combined EE FTE
+                - Assignment List
+                * Show only 4 decimal places for FTE, 6 by default
+ ============================================================================*/
+
+For &i = 1 To &rs2.ActiveRowCount
+   
+   &Rec = &rs2(&i).CCS_FEE_ABS_EVT;
+   &EmplID = &Rec.EMPLID.Value;
+   &numEmplID = Value(LTrim(&EmplID));
+   &PosNbr = &Rec.POSITION_NBR.Value;
+   &numPosNbr = Value(LTrim(&PosNbr));
+   &Rec.FTE.DecimalPosition = 4;
+   &recCCS_DERIVED_STA = &rs2(&i).GetRecord(Record.CCS_DERIVED_STA);
+   /* Make Hyperlink Text to EmplID and Position Nbr                         */
+   &EELinkName = &Rec.EMPLID.Value;
+   &PosLinkName = &Rec.POSITION_NBR.Value;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* This link will transfer you to a different component              */
+   /*   so provide the key fields necessary to get to the               */
+   /*   desired record on the new component                             */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &Key1Value = &Rec.EMPLID.Value;
+   &EEProfile_Param = "&EMPLID=" | &Key1Value;
+   
+   &Key2Value = &Rec.POSITION_NBR.Value;
+   &PosProfile_Param = "&POSITION_NBR=" | &Key2Value;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Build the Transfer URL to EE Profile page and Pos Profile page    */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &EEProfileURL = GenerateComponentPortalURL(%Portal, %Node, MenuName."ROLE_MANAGER", %Market, Component.CCS_EEPROFILE_PRN, Page.CCS_EEPROFILE_FYR, "U") | &EEProfile_Param;
+   &PosProfileURL = GenerateComponentPortalURL(%Portal, %Node, MenuName."ROLE_MANAGER", %Market, Component.CCS_POSPROFILE_PRN, Page.CCS_POSPROFILE_FYR, "U") | &PosProfile_Param;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Create the desired Hover Text for this row                        */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &EEProfile_Hover = "EE_Profile " | &EELinkName;
+   &PosProfile_Hover = "Pos_Profile " | &PosLinkName;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Now create the hyperlink object (Assigning the                    */
+   /*   Hyperlink Text, Hover Over Text, and the URL                    */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &EEProfile_HTML_Text = GetHTMLText(HTML.CCS_HTML_EEPROFILE, &EELinkName, &EEProfile_Hover, &EEProfileURL);
+   &rs2(&i).CCS_DERIVED_STA.CCS_STFLIS_VIEW_EE.Value = &EEProfile_HTML_Text;
+   
+   &PosProfile_HTML_Text = GetHTMLText(HTML.CCS_HTML_POSPROFILE, &PosLinkName, &PosProfile_Hover, &PosProfileURL);
+   &rs2(&i).CCS_DERIVED_STA.CCS_STFLIS_VIEWPOS.Value = &PosProfile_HTML_Text;
+   
+   
+   /* Call Function to Get Assignment List by Position Nbr, using Delimiter */
+   CCS_ASSIGNMENT_LIS(&StaffYearStatus, &PosNbr, &Asg_01, &Asg_02, &Asg_03, &Asg_04, &Asg_05, &Asg_06, &Asg_07, &Asg_List);
+   &recCCS_DERIVED_STA.CCS_STF_ASGN_LIST.Value = &Asg_List;
+   
+End-For;
+
+/* DO NOT display Position with Active Occupy */
+For &i = &rs2.ActiveRowCount To 1 Step - 1
+   &Rec = &rs2(&i).CCS_FEE_ABS_EVT;
+   &PosNbr = &Rec.POSITION_NBR.Value;
+   &sEmplId = "";
+   SQLExec(SQL.CCS_FPOS_OCCUPY, &PosNbr, &sEmplId, &nEmplRcd);
+   If &sEmplId <> "" Then
+      &rs2(&i).Visible = False;
+      REM WinMessage("PAGE.CCS_FSTFLIS_CERV.Activate 5 " | "&sEmplID=" | &sEmplID | "&PosNbr=" | &PosNbr | "&nSchoolYr=" | &nSchoolYr | " &I=" | &i, 0);
+   End-If;
+End-For;
