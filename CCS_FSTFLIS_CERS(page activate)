@@ -1,0 +1,182 @@
+Declare Function CCS_ASSIGNMENT_LIS PeopleCode CCS_FUNCLIB_STA.CCS_ASSIGNMENT_LIS FieldFormula;
+Declare Function CCS_FUT_YR_STAFF PeopleCode CCS_FUNCLIB_STA.CCS_FUT_YR_STAFF FieldFormula;
+
+Global Record &recCcsBalLisWrk;
+
+Component Row &rowSTFLIS_SRC, &rowSTFLIS_ALL;
+Component Record &recCCS_DERIVED_STA;
+Component number &numSchoolYr;
+Component string &StaffYearStatus;
+Component string &sUnionCode;
+Component string &strLocationCd;
+
+Component array of array of any &ArrSUM_EE_FTE, &ArrCNT_POS_OCPY;
+
+
+Local Rowset &rs0, &rs2;
+
+Local Record &RecCCS_FJOB_AMO_CS;
+Local array of array of any &ArrCCS_FJOB_AMO_CS;
+
+Local string &EmplID, &PosNbr, &strSchoolYr, &strJobcode;
+Local number &numSchoolYr, &numEmplID, &numPosNbr, &sumFTE, &cntPosOcpy, &LineNo, &index;
+Local string &Asg_List, &Asg_01, &Asg_02, &Asg_03, &Asg_04, &Asg_05, &Asg_06, &Asg_07, &Delim;
+Local SQL &SQL;
+
+/*============================================================================
+  Code for Page CCS_CSTFLIS_CERS.Activate 
+  Description: Activate Page CurYr Teach Staff List Absence  
+ ============================================================================*/
+
+&ArrSUM_EE_FTE = CreateArrayRept(CreateArrayAny(), 0);
+
+&SQL = CreateSQL("SELECT EMPLID, sum(FTE) as COM_FTE FROM PS_CCS_FJOB_CONSDL   WHERE  PAYGROUP IN ('MMM', 'SUB')  Group by EMPLID");
+While &SQL.Fetch(&EmplID, &sumFTE)
+   &ArrSUM_EE_FTE.Push(CreateArrayAny(&EmplID, &sumFTE));
+End-While;
+&SQL.Close();
+
+/*Code for finding who the current active occupy for an absent position is*/
+&ArrCCS_FJOB_AMO_CS = CreateArrayRept(CreateArrayAny(), 0);
+&RecCCS_FJOB_AMO_CS = CreateRecord(Record.CCS_FJOB_AMO_CS);
+
+&SQL = CreateSQL("SELECT * FROM PS_CCS_FJOB_AMO_CS");
+While &SQL.Fetch(&RecCCS_FJOB_AMO_CS)
+   &ArrCCS_FJOB_AMO_CS.Push(CreateArrayAny(&RecCCS_FJOB_AMO_CS.POSITION_NBR.Value, &RecCCS_FJOB_AMO_CS.NAME_DISPLAY.Value, &RecCCS_FJOB_AMO_CS.BGN_DT.Value, &RecCCS_FJOB_AMO_CS.END_DATE.Value))
+End-While;
+&SQL.Close();
+
+
+
+
+
+&rs0 = GetLevel0();
+&rs2 = &rs0(1).GetRowset(Scroll.CCS_FEE_ABS_EVT);
+
+&strLocationCd = GetField(CCS_FSTFLIS_SRC.LOCATION).Value;
+&strJobcode = &rs0(1).CCS_BAL_LIS_WRK.JOBCODE.Value;
+REM WinMessage("PAGE.CCS_CSTFLIS_CERA.Activate 1  " | "Location=" | &strLocationCd, 0);
+
+&rs2.Flush();
+
+If &strJobcode = "" And
+      All(&recCcsBalLisWrk) Then
+   /*If the Jobcode wasn't passed in through the work record CCS_BAL_LIS_WRK check if it was passed through the search record*/
+   &strJobcode = &recCcsBalLisWrk.JOBCODE.Value;
+   
+End-If;
+
+/*Reset the global record because the page transfer is done*/
+&recCcsBalLisWrk = CreateRecord(Record.CCS_BAL_LIS_WRK);
+
+If &strJobcode <> "" Then
+   &rs2.Select(Record.CCS_FEE_ABS_EVT, "WHERE LOCATION = :1 AND PAYGROUP IN ('MMM','SUB') AND JOBCODE = :2", &strLocationCd, &strJobcode);
+Else
+   &rs2.Select(Record.CCS_FEE_ABS_EVT, "WHERE LOCATION = :1 AND PAYGROUP IN ('MMM','SUB')", &strLocationCd);
+   
+End-If;
+
+&rs2.ChangeOnInit = False;
+&Refreshed = True;
+
+&rs2.Sort(PERSONAL_DATA.LAST_NAME, "A");
+
+If &ArrSUM_EE_FTE.Len = 0 Then
+   &ArrSUM_EE_FTE = CreateArrayRept(CreateArrayAny(), 0);
+   
+   &SQL = CreateSQL("SELECT EMPLID, sum(FTE) as COM_FTE FROM PS_CCS_FJOB_CONSDL  WHERE PAYGROUP IN ('MMM', 'SUB')  Group by EMPLID");
+   While &SQL.Fetch(&EmplID, &sumFTE)
+      &ArrSUM_EE_FTE.Push(CreateArrayAny(&EmplID, &sumFTE));
+   End-While;
+   &SQL.Close();
+End-If;
+
+/* Call Function to Get Future Year from STFCNTL_HDR */
+CCS_FUT_YR_STAFF(&numSchoolYr, &StaffYearStatus);
+
+/* Assign Union Code */
+&sUnionCode = "ATA";
+
+REM WinMessage("PAGE.CCS_CSTFLIS_CERS.Activate 1  " | "Location=" | &strLocationCd, 0);
+
+/*============================================================================
+  Code for Grid CCS_CEE_ABS_EVT
+  Description:  * Load all derived columns in Absences Grid:
+                - Hyper Link to EE Profile (EE Number)
+                - Hyper Link to Position Profile (Pos Number)
+                - Combined EE FTE
+                - Assignment List
+                * Show only 4 decimal places for FTE, 6 by default
+ ============================================================================*/
+
+For &i = 1 To &rs2.ActiveRowCount
+   
+   &Rec = &rs2(&i).CCS_FEE_ABS_EVT;
+   &EmplID = &Rec.EMPLID.Value;
+   &numEmplID = Value(LTrim(&EmplID));
+   &PosNbr = &Rec.POSITION_NBR.Value;
+   &numPosNbr = Value(LTrim(&PosNbr));
+   
+   &Rec.FTE.DecimalPosition = 4;
+   &recCCS_DERIVED_STA = &rs2(&i).GetRecord(Record.CCS_DERIVED_STA);
+   /* Make Hyperlink Text to EmplID and Position Nbr                         */
+   &EELinkName = &Rec.EMPLID.Value;
+   &PosLinkName = &Rec.POSITION_NBR.Value;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* This link will transfer you to a different component              */
+   /*   so provide the key fields necessary to get to the               */
+   /*   desired record on the new component                             */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &Key1Value = &Rec.EMPLID.Value;
+   &EEProfile_Param = "&EMPLID=" | &Key1Value;
+   
+   &Key2Value = &Rec.POSITION_NBR.Value;
+   &PosProfile_Param = "&POSITION_NBR=" | &Key2Value;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Build the Transfer URL to EE Profile page and Pos Profile page    */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &EEProfileURL = GenerateComponentPortalURL(%Portal, %Node, MenuName."ROLE_MANAGER", %Market, Component.CCS_EEPROFILE_PRN, Page.CCS_EEPROFILE_FYR, "U") | &EEProfile_Param;
+   &PosProfileURL = GenerateComponentPortalURL(%Portal, %Node, MenuName."ROLE_MANAGER", %Market, Component.CCS_POSPROFILE_PRN, Page.CCS_POSPROFILE_FYR, "U") | &PosProfile_Param;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Create the desired Hover Text for this row                        */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &EEProfile_Hover = "EE_Profile " | &EELinkName;
+   &PosProfile_Hover = "Pos_Profile " | &PosLinkName;
+   
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   /* Now create the hyperlink object (Assigning the                    */
+   /*   Hyperlink Text, Hover Over Text, and the URL                    */
+   /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+   &EEProfile_HTML_Text = GetHTMLText(HTML.CCS_HTML_EEPROFILE, &EELinkName, &EEProfile_Hover, &EEProfileURL);
+   &rs2(&i).CCS_DERIVED_STA.CCS_STFLIS_VIEW_EE.Value = &EEProfile_HTML_Text;
+   
+   &PosProfile_HTML_Text = GetHTMLText(HTML.CCS_HTML_POSPROFILE, &PosLinkName, &PosProfile_Hover, &PosProfileURL);
+   &rs2(&i).CCS_DERIVED_STA.CCS_STFLIS_VIEWPOS.Value = &PosProfile_HTML_Text;
+   REM WinMessage("PAGE.CCS_CSTFLIS_CERA.Activate 4 " | "&EmplID=" | &EmplID | "&PosNbr=" | &PosNbr, 0);
+   If &EmplID <> "" Then
+      /* Get Combined FTE from Array */
+      &Index1 = &ArrSUM_EE_FTE.Find(&numEmplID);
+      If &Index1 > 0 Then
+         &sumFTE = &ArrSUM_EE_FTE [&Index1][2];
+         &recCCS_DERIVED_STA.FTE.Value = &sumFTE;
+         &recCCS_DERIVED_STA.FTE.DecimalPosition = 4;
+      End-If;
+   End-If;
+   
+   /* Call Function to Get Assignment List by Position Nbr, using Delimiter */
+   CCS_ASSIGNMENT_LIS(&StaffYearStatus, &PosNbr, &Asg_01, &Asg_02, &Asg_03, &Asg_04, &Asg_05, &Asg_06, &Asg_07, &Asg_List);
+   &recCCS_DERIVED_STA.CCS_STF_ASGN_LIST.Value = &Asg_List;
+   
+   /*Find the employee that is filling the absent position*/
+   
+   &index = &ArrCCS_FJOB_AMO_CS.Find(&PosNbr);
+   If &index > 0 Then
+      &recCCS_DERIVED_STA.DISPLAY_NAME.Value = &ArrCCS_FJOB_AMO_CS [&index][2];
+      &recCCS_DERIVED_STA.BGN_DT.Value = &ArrCCS_FJOB_AMO_CS [&index][3];
+      &recCCS_DERIVED_STA.END_DT.Value = &ArrCCS_FJOB_AMO_CS [&index][4];
+   End-If;
+   
+End-For;
