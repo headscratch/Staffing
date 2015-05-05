@@ -1,0 +1,137 @@
+import CCS_STF_STA:CCS_JOB;
+import CCS_STF_STA:CCS_TRANSACTION;
+
+Declare Function CCS_CUR_YR_STAFF PeopleCode CCS_FUNCLIB_STA.CCS_CUR_YR_STAFF FieldFormula;
+Declare Function CCS_GET_ALLOCATION_CAT PeopleCode CCS_FUNCLIB_STA.CCS_GET_ALLOC_CAT FieldFormula;
+
+Component Record &recSurplusRationale;
+
+Local object &oJobObj;
+Local object &oJobTransaction;
+
+Local Row &rowPosRow;
+
+Local number &nSchoolYr;
+Local number &nFTE;
+Local number &nStdHours;
+
+Local string &sPosNbr;
+Local string &sStaApproval;
+Local string &sEffStatus;
+Local string &sChgAction;
+Local string &sChgCat;
+Local string &sDeptid;
+Local string &sJobCode;
+Local string &sAllocCat;
+Local string &sPosDescr;
+Local string &sUnionCode;
+Local string &sPosPoolID;
+Local string &sEmplID;
+Local string &sEmplRcd;
+Local string &sCcsStfAction;
+
+Local date &dEFFDT;
+Local date &dEFFDT_JobChg;
+
+Local datetime &dtTempDateTime;
+
+&recSurplusRationale = CreateRecord(Record.CCS_EE_SURP_RSN);
+&rowPosRow = GetRow();
+
+SQLExec("SELECT CCS_SCHOOL_YR_NUM FROM PS_CCS_STFCNTL_HDR WHERE CCS_STF_YEAR_STAT = 'F' ", &nSchoolYr);
+
+/*Get the needed keys for the CCS_EE_JOB_STF table so that a row can be retrieved*/
+&dEFFDT = &rowPosRow.CCS_DERIVED_STA.EFFDT.Value;
+&sEmplID = &rowPosRow.CCS_FSTFLIS_ALL.EMPLID.Value;
+&sPosNbr = &rowPosRow.CCS_FSTFLIS_ALL.POSITION_NBR.Value;
+&sEmplRcd = &rowPosRow.CCS_FSTFLIS_ALL.EMPL_RCD.Value;
+
+
+
+/*Set up some variables that define what type of transaction this is */
+&sStaApproval = "S"; /*Saved as Draft*/
+&sEffStatus = "A";
+
+
+&sAllocCat = CCS_GET_ALLOCATION_CAT(&rowPosRow.CCS_FSTFLIS_ALL.JOBCODE.Value, %Date);
+&oJobTransaction = create CCS_STF_STA:CCS_TRANSACTION();
+&oJobObj = create CCS_STF_STA:CCS_JOB();
+&oJobObj.recJob.LOCATION.Value = &rowPosRow.CCS_FSTFLIS_ALL.LOCATION.Value;
+
+If Not &oJobObj.FindPosID(0, &sPosNbr) Then
+   &oJobObj.InsertPosID();
+End-If;
+
+&dtTempDateTime = DateTimeValue("08.01." | &nSchoolYr | " 00:00:00.000000");
+&dEFFDT_JobChg = DatePart(&dtTempDateTime);
+
+/*See if there is an existing staffing Job Row for this change*/
+If Not &oJobObj.BuildJob(&nSchoolYr, &sEmplID, &sEmplRcd, &dEFFDT, &oJobObj.nPosId) Then
+   If &rowPosRow.CCS_FSTFLIS_ALL.CCS_STF_SURPLUS_PP.Value = "P" Then
+      /*Record the transaction*/
+      &sChgAction = "S"; /*Save as Draft*/
+      &sChgCat = "Priority Placement";
+      &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+      &oJobTransaction.CreateTransactKey(&oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+      &oJobTransaction.sPositionNbr = &sPosNbr;
+      /*No existing Job data in CCS_EE_JOB_STF so we'll populte a new record and then insert it*/
+      &oJobObj.recJob.LOCATION.Value = &rowPosRow.CCS_FSTFLIS_ALL.LOCATION.Value;
+      &oJobObj.recJob.SETID.Value = "CRCSS";
+      &oJobObj.recJob.PAYGROUP.Value = &rowPosRow.CCS_FSTFLIS_ALL.PAYGROUP.Value;
+      &oJobObj.recJob.EMPL_STATUS.Value = &rowPosRow.CCS_FSTFLIS_ALL.EMPL_STATUS.Value;
+      &oJobObj.recJob.CCS_STF_CNTRCT_TYP.Value = &rowPosRow.CCS_FSTFLIS_ALL.CCS_STF_CNTRCT_TYP.Value;
+      &oJobObj.recJob.CCS_STF_ALLOC_CAT.Value = &sAllocCat;
+      &oJobObj.recJob.CCS_STA_APPROVAL.Value = "S";
+      &oJobObj.recJob.CCS_STF_SURPLUS_PP.Value = &rowPosRow.CCS_FSTFLIS_ALL.CCS_STF_SURPLUS_PP.Value;
+      &oJobObj.recJob.LASTUPDDTTM.Value = %Datetime;
+      &oJobObj.recJob.LASTUPDOPRID.Value = %OperatorId;
+      &oJobObj.recJob.CREATEDTTM.Value = %Datetime;
+      &oJobObj.recJob.CREATED_BY.Value = %OperatorId;
+      &oJobObj.recJob.EFFDT.Value = &dEFFDT_JobChg;
+      &oJobObj.recJob.CCS_TRANSACT_Key.Value = &oJobTransaction.sCCS_TRANSACT_KEY;
+      &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+      &oJobObj.recJob.CCS_STF_ACTION.Value = "S"; /*Person is being surplussed*/
+      &oJobObj.InsertJobChange();
+      &rowPosRow.CCS_DERIVED_STA.EFFDT.Value = &dEFFDT_JobChg;
+      &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+   End-If;
+Else
+   /*Record the transaction*/
+   &sChgAction = "S"; /*Save as Draft*/
+   
+   If &rowPosRow.CCS_FSTFLIS_ALL.CCS_STF_SURPLUS_PP.Value = "P" Then
+      &sChgCat = "Priority Placement";
+      &sCcsStfAction = "S"; /*Person is being surplussed*/
+      
+      &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+      &oJobTransaction.CreateTransactKey(&oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+      &oJobTransaction.sPositionNbr = &sPosNbr;
+      /*Update the associate Staffing Job record*/
+      &oJobObj.recJob.CCS_STF_ALLOC_CAT.Value = &sAllocCat;
+      &oJobObj.recJob.CCS_STF_SURPLUS_PP.Value = &rowPosRow.CCS_FSTFLIS_ALL.CCS_STF_SURPLUS_PP.Value;
+      &oJobObj.recJob.LASTUPDDTTM.Value = %Datetime;
+      &oJobObj.recJob.LASTUPDOPRID.Value = %OperatorId;
+      &oJobObj.recJob.CCS_TRANSACT_KEY.Value = &oJobTransaction.sCCS_TRANSACT_KEY;
+      &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+      &oJobObj.recJob.EFFDT.Value = &dEFFDT_JobChg;
+      &oJobObj.recJob.CCS_STF_ACTION.Value = &sCcsStfAction; /*Person is being surplussed*/
+      &oJobObj.UpdateJobChange();
+      &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+      &rowPosRow.CCS_DERIVED_STA.EFFDT.Value = &dEFFDT_JobChg;
+      
+   Else
+      &sChgCat = "Undo Priority Placement";
+      &sCcsStfAction = "U"; /*Person is being unsurplussed*/
+      
+      
+      &oJobTransaction.Set_CCS_TRANSACTION_Dtl(&sChgAction, &sChgCat);
+      &oJobTransaction.CreateTransactKey(&oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value, &oJobObj.recJob.LOCATION.Value, &sPosNbr);
+      &oJobTransaction.sPositionNbr = &sPosNbr;
+      
+      &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
+      
+      &oJobObj.UnsurplusAndDeleteJob(&nSchoolYr, &sEmplID, &sEmplRcd, &dEFFDT, &oJobObj.nPosId, &oJobObj.recJob.CCS_TRANSACT_NBR.Value, "S");
+      
+   End-If;
+   
+End-If;
