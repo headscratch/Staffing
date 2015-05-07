@@ -91,11 +91,16 @@ method BuildApprovalList
    Local number &nEMPLRCDIndex;
    Local number &nRelTranIndex;
    Local number &nPrevTranIndex;
+   Local number &nTempPosId;
+   Local number &nTempEmplId;
+   Local number &nTempEmplRcd;
    
    Local boolean &bExistingJobData;
    Local boolean &bExistingPosData;
    
    Local float &nRuntime;
+   
+   Local date &dOccupyDate;
    
    
    &rsApprovalList = CreateRowset(Record.CCS_STF_APRV_VW);
@@ -189,11 +194,6 @@ method BuildApprovalList
                &aEMPLID.Push(CreateArrayAny(&rNew_APRV_VW.EMPLID.Value));
                &nEMPLIDIndex = &aEMPLID.Len;
                &aEMPLID [&nEMPLIDIndex].Push(&rNew_APRV_VW.CCS_COMBINED_FTE.Value);
-			else
-				/*Pull out the stored Combined FTE for the Employee*/
-				If All(&rNew_APRV_VW.EMPLID.Value) Then
-				   &rNew_APRV_VW.CCS_COMBINED_FTE.Value = &aEMPLID [&nEMPLIDIndex][2];
-				End-If;
             End-If;
             
             &aEMPLID [&nEMPLIDIndex].Push(&rNew_APRV_VW.POSITION_NBR.Value);
@@ -203,7 +203,10 @@ method BuildApprovalList
                &recPrev_APRV_VW = %This.GetPreviousPosInfo(&rNew_APRV_VW);
             End-If;
             
-
+            /*Pull out the stored Combined FTE for the Employee*/
+            If All(&rNew_APRV_VW.EMPLID.Value) Then
+               &rNew_APRV_VW.CCS_COMBINED_FTE.Value = &aEMPLID [&nEMPLIDIndex][2];
+            End-If;
          End-If;
          
          &rNew_APRV_VW = %This.GetCurrentPosInfo(&rNew_APRV_VW, &rActual_APRV_VW);
@@ -345,9 +348,19 @@ method BuildApprovalList
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "S";
          End-If;
          
+         &nTempPosId = &rTempCCS_DERIVED_APR.CCS_STF_POS_ID.Value;
+         &nTempEmplId = &rTempCCS_DERIVED_APR.EMPLID.Value;
+         &nTempEmplRcd = &rTempCCS_DERIVED_APR.EMPL_RCD.Value;
+         
+         
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
                &recCurrentRecord.CCS_STF_ACTION.Value = "T" Then
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "T";
+            /*Find the occupy dates for the position transfer*/
+            SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &nTempEmplId, &nTempEmplRcd, &dOccupyDate);
+			if all (&dOccupyDate) Then
+				&rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
+			end-if;
          End-If;
          
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
@@ -358,11 +371,22 @@ method BuildApprovalList
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
                &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "P";
+			            /*Find the occupy dates for the position transfer*/
+            SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &nTempEmplId, &nTempEmplRcd, &dOccupyDate);
+			if all (&dOccupyDate) Then
+				&rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
+			end-if;
+			
          End-If;
          
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Position" And
                &recCurrentRecord.CCS_STF_ACTION.Value = "U" Then
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "C";
+         End-If;
+         
+         If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Position" And
+               &recCurrentRecord.CCS_STF_ACTION.Value = "I" Then
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "I";
          End-If;
          
          /*Set the approval or rejected flags for the */
@@ -388,6 +412,9 @@ method BuildApprovalList
             &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "R";
          End-If;
          
+         /*If the combined FTE is less than zero set it to zero*/
+         
+         
          &rsDisplayApprovals.InsertRow(&nDisplayRow);
          &nDisplayRow = &nDisplayRow + 1;
          
@@ -412,6 +439,7 @@ method BuildApprovalList
                If &nEMPLIDIndex > 0 Then
                   &nEMPLRCDIndex = &aActualEMPLIndx [&nEMPLIDIndex].Find(&rActual_APRV_VW.EMPL_RCD.Value);
                   If &nEMPLRCDIndex > 0 Then
+                     
                      &rActual_APRV_VW.CopyFieldsTo(&aActualEMPL [&nEMPLIDIndex][&nEMPLRCDIndex]);
                   Else
                      /*There is no record stored for by this EMPLID and EMPL_RCD yet*/
@@ -421,10 +449,8 @@ method BuildApprovalList
                   End-If;
                Else
                   /*There is no actual record stored by this EMPLID yet*/
-                  &aActualEMPL.Push(CreateArrayAny(&rActual_APRV_VW.EMPLID.Value, &rActual_APRV_VW.EMPL_RCD.Value, &recTemp_APRV_VW));
-                  &aActualEMPL.Push(&rActual_APRV_VW.EMPLID.Value);
+                  &aActualEMPL.Push(CreateArrayAny(&rActual_APRV_VW.EMPLID.Value, &recTemp_APRV_VW));
                   &aActualEMPLIndx.Push(&rActual_APRV_VW.EMPLID.Value);
-                  &aActualEMPL [&aActualEMPL.Len].Push(&recTemp_APRV_VW);
                   &aActualEMPLIndx [&aActualEMPLIndx.Len].Push(&rActual_APRV_VW.EMPL_RCD.Value);
                End-If;
             End-If;
@@ -841,6 +867,5 @@ method GetPreviousPosInfo
    End-If;
    
    Return &recPrevRecord;
-   
 end-method;
 

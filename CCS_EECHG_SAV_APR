@@ -310,7 +310,7 @@ If %Page = "CCS_EECHG_CYR" Then
          
          /*Record the Position Occupy Begin and End Dates*/
          &dOccpyEndDate = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_END_DT.Value;
-         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &dEFFDT, &dOccpyEndDate);
+         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value, &dOccpyEndDate);
          
          /*Record the transaction*/
          &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
@@ -580,7 +580,7 @@ If %Page = "CCS_EECHG_FYR" Then
          
          /*Record the Position Occupy Begin and End Dates*/
          &dOccpyEndDate = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_END_DT.Value;
-         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &dEFFDT, &dOccpyEndDate);
+         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value, &dOccpyEndDate);
          
       End-If;
       

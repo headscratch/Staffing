@@ -277,7 +277,12 @@ If %Page = "CCS_EECHG_CYR" Then
          REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &EmplID | " PosNbr=" | &sPosNbr | " Loc=" | &recCCS_DERIVED_STA.LOCATION.Value | " &sUnionCd=" | &sUnionCd, 0);
          /* Check if Position currently has Occupies and Show Warning if it does */
          &sEEOccupy = "";
+         /*
          SQLExec("SELECT EMPLID, EMPL_RCD, LOCATION FROM PS_CCS_CSTFLIS_ALL WHERE POSITION_NBR = :1", &sPosNbr, &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc);
+*/
+         
+         SQLExec("SELECT EMPLID, EMPL_RCD, LOCATION FROM PS_CCS_CSTFLIS_ALL WHERE POSITION_NBR = :1 AND (CCS_STF_SURPLUS_PP IS NULL  OR CCS_STF_SURPLUS_PP <> 'P') AND (EFF_STATUS IS NULL OR EFF_STATUS <> 'I')", &sPosNbr, &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc);
+         
          If &sEEOccupy <> "" Then
             MessageBox(%MsgStyle_OK, "", 20001, 31, "WARNINGS: This Position currently has Occupies");
             REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &sEEOccupy, 0);
@@ -365,9 +370,9 @@ If %Page = "CCS_EECHG_CYR" Then
                   &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
                   &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
                End-If;
-			 Else
-                  &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
-                  &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
+            Else
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
                
             End-If;
             &oJobObj.recJob.EFFDT.Value = &dEFFDT;
@@ -376,7 +381,7 @@ If %Page = "CCS_EECHG_CYR" Then
          End-If;
          /*Record the Position Occupy Begin and End Dates*/
          &dOccpyEndDate = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_END_DT.Value;
-         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &dEFFDT, &dOccpyEndDate);
+         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value, &dOccpyEndDate);
          
          /*Record the transaction*/
          &oJobTransaction.InsertJobTransaction(&oJobObj.recJob);
@@ -606,7 +611,11 @@ If %Page = "CCS_EECHG_FYR" Then
          REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &EmplID | " PosNbr=" | &sPosNbr | " Loc=" | &recCCS_DERIVED_STA.LOCATION.Value | " &sUnionCd=" | &sUnionCd, 0);
          /* Check if Position currently has Occupies and Show Warning if it does */
          &sEEOccupy = "";
+         /*
          SQLExec("SELECT EMPLID, EMPL_RCD, LOCATION FROM PS_CCS_FSTFLIS_ALL WHERE POSITION_NBR = :1", &sPosNbr, &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc);
+*/
+         SQLExec("SELECT EMPLID, EMPL_RCD, LOCATION FROM PS_CCS_FSTFLIS_ALL WHERE POSITION_NBR = :1 AND (CCS_STF_SURPLUS_PP IS NULL  OR CCS_STF_SURPLUS_PP <> 'P') AND (EFF_STATUS IS NULL OR EFF_STATUS <> 'I')", &sPosNbr, &sEEOccupy, &sEEOcpyRcd, &sEEOcpyLoc);
+         
          If &sEEOccupy <> "" Then
             MessageBox(%MsgStyle_OK, "", 20001, 31, "WARNINGS: This Position currently has Occupies");
             REM WinMessage("CCS_DERIVED_STA.CCS_EECHG_SAV_DRF.FChange New Occupy " | " EmplID=" | &sEEOccupy, 0);
@@ -696,9 +705,9 @@ If %Page = "CCS_EECHG_FYR" Then
                   &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
                   &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
                End-If;
-			 Else
-                  &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
-                  &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
+            Else
+               &oJobObj.recJob.CCS_TRANSACT_NBR.Value = &oJobObj.GetTransactionNbr();
+               &oJobObj.recJob.CCS_STF_ACTION.Value = "P"; /*Just an employee placement, because not associated with a removal*/
             End-If;
             &oJobObj.recJob.EFFDT.Value = &dEFFDT;
             &oJobObj.recJob.CCS_SCHOOL_YR_NUM.Value = &nSchoolYr;
@@ -709,7 +718,7 @@ If %Page = "CCS_EECHG_FYR" Then
          
          /*Record the Position Occupy Begin and End Dates*/
          &dOccpyEndDate = &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_END_DT.Value;
-         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &dEFFDT, &dOccpyEndDate);
+         CCS_POSCHG_OCPY_DT(&sPosNbr, &sEmplID, &sEmplRcd, &rs2(&i).CCS_DERIVED_STA.CCS_OCPY_BGN_DT.Value, &dOccpyEndDate);
          
       End-If;
       
