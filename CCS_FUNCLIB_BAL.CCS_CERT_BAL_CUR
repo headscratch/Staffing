@@ -141,15 +141,15 @@ The inner array contains:
       Else
          &sAbsOrVac = "";
       End-If;
-   
-   &posIndex = &certPosArray.Find(&certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.POSITION_NBR.Value);
+      
+      &posIndex = &certPosArray.Find(&certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.POSITION_NBR.Value);
       
       
-      If &posIndex > 0 Then         
+      If &posIndex > 0 Then
          If &certPosArray [&posIndex][6] = "I" Then
             &sAbsOrVac = "Deleted";
          End-If;
-      
+         
          /*																1																							2													3								4							5										6											7*/
          &stfJobs [&A] = CreateArrayAny(&certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.EMPLID.Value | &certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.POSITION_NBR.Value, &certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.EFF_STATUS.Value, &certPosArray [&posIndex][2], &certPosArray [&posIndex][3], &certPosArray [&posIndex][4], &certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.POSITION_NBR.Value, &sAbsOrVac);
       End-If;
@@ -238,7 +238,7 @@ The inner array contains:
             If &stfJobs [&A][7] = "Vac" Then
                
                /*Position has an absent occupy*/
-
+               
                &stfJobsResolved [&countIndex][7] = &stfJobsResolved [&countIndex][7] + &stfJobs [&A][3];
             End-If;
             /*It is an absence so we'll add to the absence total for this position*/
@@ -285,6 +285,9 @@ The inner array contains:
    
    /*Go through all the Jobs for a school and add up the FTE*/
    For &A = 1 To &stfJobsResolved.Len
+      /*See if there is any existing pos info for this job*/
+      &posIndex = &certPosArray.Find(&stfJobsResolved [&A][1]);
+      
       /*See if the allocation cat already has a row started for it*/
       &countIndex = &stfJobCounts.Find(&stfJobsResolved [&A][3]);
       
@@ -292,12 +295,16 @@ The inner array contains:
          
          /*If there is no row for the Allocation category of this position create one and store the FTE of this position*/
          /*Make sure that the person has not been priority placed by the principle, and is still active*/
-	If &stfJobsResolved [&A][6] > 0  And &stfJobsResolved [&A][5] = 0  Then
-            /*There is at least one absence*/
-            &atLeastOneAbscence = 1;
-			&nPosAbsence = &stfJobsResolved [&A][6];
-			else
-			&nPosAbsence = 0;
+         If &stfJobsResolved [&A][6] > 0 And
+               &stfJobsResolved [&A][5] = 0 Then
+            If &posIndex > 0 And
+                  &certPosArray [&posIndex][6] <> "I" Then
+               /*There is at least one absence*/
+               &atLeastOneAbscence = 1;
+               &nPosAbsence = &stfJobsResolved [&A][6];
+            Else
+               &nPosAbsence = 0;
+            End-If;
          End-If;
          /*Check that at least one ACTIVE person is occupying the Position*/
          If &stfJobsResolved [&A][5] > 0 Then
@@ -311,7 +318,14 @@ The inner array contains:
                &stfJobsResolved [&A][6] > 0 Then
             &nPosVacancy = 0;
          Else
-            &nPosVacancy = &stfJobsResolved [&A][7];
+            /*See if the pos has been deleted in staffing*/
+            If &posIndex > 0 And
+                  &certPosArray [&posIndex][6] <> "I" Then
+               &nPosVacancy = &stfJobsResolved [&A][7];
+            Else
+               /*It has been deleted so wipe out this vacancy*/
+               &nPosVacancy = 0;
+            End-If;
          End-If;
          
          /*											1				 2			3			 	4  					5							6							7			*/
@@ -320,12 +334,13 @@ The inner array contains:
       Else
          /*Row already exists for this allocation category so just add this positions FTE to it*/
          /*Make sure that the person has not been priority placed by the principle, and is still active*/
-         If &stfJobsResolved [&A][6] > 0  And &stfJobsResolved [&A][5] = 0  Then
+         If &stfJobsResolved [&A][6] > 0 And
+               &stfJobsResolved [&A][5] = 0 Then
             /*There is at least one absence*/
-         &atLeastOneAbscence = 1;
-			&nPosAbsence = &stfJobsResolved [&A][6];
-			else
-			&nPosAbsence = 0;
+            &atLeastOneAbscence = 1;
+            &nPosAbsence = &stfJobsResolved [&A][6];
+         Else
+            &nPosAbsence = 0;
          End-If;
          /*Check that at least one ACTIVE person is occupying the Position*/
          If &stfJobsResolved [&A][5] > 0 Then
@@ -344,8 +359,8 @@ The inner array contains:
          Else
             &nPosVacancy = &stfJobsResolved [&A][7];
          End-If;
-
-		 /*Add to vacant Staff*/
+         
+         /*Add to vacant Staff*/
          &stfJobCounts [&countIndex][4] = &stfJobCounts [&countIndex][4] + &nPosVacancy;;
          
       End-If;
@@ -367,9 +382,9 @@ The inner array contains:
          If &stfJobsResolved [&nPosOccupyIndex][5] > 0 Or
                &stfJobsResolved [&nPosOccupyIndex][6] Then
             &nPosVacancy = 0;
-         
-         &nPosVacancy = 0;
-		End-If;
+            
+            &nPosVacancy = 0;
+         End-If;
       Else
          /*It's not part of a JOB so it's vacant*/
          &nPosVacancy = &certPosArray [&A][2];
@@ -379,7 +394,7 @@ The inner array contains:
          /*Can't be vacant because it doesn't exist*/
          &nPosVacancy = 0;
          &nActivePosFTE = 0;
-		 &nPosAbsence = 0;
+         &nPosAbsence = 0;
       Else
          &nActivePosFTE = &certPosArray [&A][2];
       End-If;

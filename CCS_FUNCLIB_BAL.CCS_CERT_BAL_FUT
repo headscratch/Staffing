@@ -33,7 +33,7 @@ Function LoadCertBalFut()
    Local number &atLeastOneAbscence;
    Local number &nPosOccupyIndex;
    Local number &nPosVacancy;
-      Local number &nPosAbsence;
+   Local number &nPosAbsence;
    Local number &nActivePosFTE;
    
    Local string &AllocID;
@@ -276,6 +276,10 @@ The inner array contains:
    
    /*Go through all the Jobs for a school and add up the FTE*/
    For &A = 1 To &stfJobsResolved.Len
+      
+      /*See if there is any existing pos info for this job*/
+      &posIndex = &certPosArray.Find(&stfJobsResolved [&A][1]);
+      
       /*See if the allocation cat already has a row started for it*/
       &countIndex = &stfJobCounts.Find(&stfJobsResolved [&A][3]);
       
@@ -283,12 +287,18 @@ The inner array contains:
          
          /*If there is no row for the Allocation category of this position create one and store the FTE of this position*/
          /*Make sure that the person has not been priority placed by the principle, and is still active*/
-         If &stfJobsResolved [&A][6] > 0  And &stfJobsResolved [&A][5] = 0  Then
-            /*There is at least one absence*/
-            &atLeastOneAbscence = 1;
-			&nPosAbsence = &stfJobsResolved [&A][6];
-			else
-			&nPosAbsence = 0;
+         If &stfJobsResolved [&A][6] > 0 And
+               &stfJobsResolved [&A][5] = 0 Then
+            /*Check if the position has been deleted in staffing*/
+            
+            If &posIndex > 0 And
+                  &certPosArray [&posIndex][6] <> "I" Then
+               /*There is at least one absence*/
+               &atLeastOneAbscence = 1;
+               &nPosAbsence = &stfJobsResolved [&A][6];
+            Else
+               &nPosAbsence = 0;
+            End-If;
          End-If;
          /*Check that at least one ACTIVE person is occupying the Position*/
          If &stfJobsResolved [&A][5] > 0 Then
@@ -303,22 +313,30 @@ The inner array contains:
                &stfJobsResolved [&A][6] > 0 Then
             &nPosVacancy = 0;
          Else
-            &nPosVacancy = &stfJobsResolved [&A][7];
+            /*See if the pos has been deleted in staffing*/
+            If &posIndex > 0 And
+                  &certPosArray [&posIndex][6] <> "I" Then
+               &nPosVacancy = &stfJobsResolved [&A][7];
+            Else
+               /*It has been deleted so wipe out this vacancy*/
+               &nPosVacancy = 0;
+            End-If;
          End-If;
          
-         /*								1							 2			3				4  						5						6							7			*/
+         /*								1							 2			3				4  			5						6							7			*/
          &stfJobCounts.Push(CreateArrayAny(&stfJobsResolved [&A][3], 0, &nActivePosFTE, &nPosVacancy, &nPosAbsence, &stfJobsResolved [&A][4], &stfJobsResolved [&A][5]));
          
          
       Else
          /*Row already exists for this allocation category so just add this positions FTE to it*/
          /*Make sure that the person has not been priority placed by the principle, and is still active*/
-         If &stfJobsResolved [&A][6] > 0  And &stfJobsResolved [&A][5] = 0  Then
+         If &stfJobsResolved [&A][6] > 0 And
+               &stfJobsResolved [&A][5] = 0 Then
             /*There is at least one absence*/
             &atLeastOneAbscence = 1;
-			&nPosAbsence = &stfJobsResolved [&A][6];
-			else
-			&nPosAbsence = 0;
+            &nPosAbsence = &stfJobsResolved [&A][6];
+         Else
+            &nPosAbsence = 0;
          End-If;
          /*Check that at least one ACTIVE person is occupying the Position*/
          If &stfJobsResolved [&A][5] > 0 Then
@@ -370,7 +388,7 @@ The inner array contains:
          /*Can't be vacant because it doesn't exist*/
          &nPosVacancy = 0;
          &nActivePosFTE = 0;
-		 &nPosAbsence = 0;
+         &nPosAbsence = 0;
       Else
          &nActivePosFTE = &certPosArray [&A][2];
       End-If;
@@ -568,7 +586,6 @@ that were calculated above. */
       &rowsetSchBal(&rowCount + 1).CCS_STF_FBAL_TS.CCS_POS_ACTV.Value = &activePosTot;
       &rowsetSchBal(&rowCount + 1).CCS_STF_FBAL_TS.CCS_POS_ACTV.Style = "STRONG";
       
-      
    Else
       /*hide the one cell with a link to the stflist page*/
       &rowsetSchBal(1).CCS_DERIVED_STA.CCS_STF_FLIST_LINK.Style = "PTTRANSPARENT";
@@ -581,9 +598,6 @@ that were calculated above. */
       &rowsetSchBal(1).CCS_DERIVED_STA.CCS_STF_FVAC_LINK.Style = "PTTRANSPARENT";
       
    End-If;
-   
-   
-   
    
    If (&atLeastOneVacancy >= 1) Then
       &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_STF_FVAC_LINK.Visible = False;
