@@ -135,7 +135,8 @@ The inner array contains:
    /*Go through all the HR Job data for the school and push it into a master array of the FTE for each position at a school*/
    /*Fill in the priority placement staffing status to be "Y" by default*/
    For &A = 1 To &certHRJobs.ActiveRowCount
-      
+		/*Reset Varaibles on loop start*/
+		&sAbsOrVac = "";
       /*If the Effective status isn't Yes than this is an Absence*/
       If &certHRJobs.GetRow(&A).CCS_FJOB_CRT_HR.EFF_STATUS.Value <> "Y" Then
          &sAbsOrVac = "Abs";
@@ -155,6 +156,9 @@ The inner array contains:
    
    /*Fill an array with all of the staffing job rows that have been Approved or are in progress. Overwrite any existing rows with this data*/
    For &A = 1 To &certStfJobsApproved.ActiveRowCount
+		/*Reset Varaibles on each loop*/
+		&sAbsOrVac = "";
+		
       &emplPosid = &certStfJobsApproved.GetRow(&A).CCS_FJOB_CRT_AP.EMPLID.Value | &certStfJobsApproved.GetRow(&A).CCS_FJOB_CRT_AP.POSITION_NBR.Value;
       &jobIndex = &stfJobs.Find(&emplPosid);
       /*If the Effective status isn't Yes than this is an Vacancy because the only changes that can be done in Staffing are Priority Placements*/
@@ -188,6 +192,9 @@ The inner array contains:
    
    /*Fill an array with all of the staffing job rows that have been saved but not submitted to HR yet. Overwrite any existing rows with this data*/
    For &A = 1 To &certStfJobsSaved.ActiveRowCount
+		/*Reset Varaibles on each loop*/
+		&sAbsOrVac = "";
+   
       &emplPosid = &certStfJobsSaved.GetRow(&A).CCS_FJOB_CRT_SV.EMPLID.Value | &certStfJobsSaved.GetRow(&A).CCS_FJOB_CRT_SV.POSITION_NBR.Value;
       &jobIndex = &stfJobs.Find(&emplPosid);
       
@@ -235,7 +242,7 @@ The inner array contains:
             
             If &stfJobs [&A][7] = "Vac" Then
                
-               /*Position has an absent occupy*/
+               /*Position has an vacant occupy*/
                &stfJobsResolved [&countIndex][7] = &stfJobsResolved [&countIndex][7] + &stfJobs [&A][3];
             End-If;
             
@@ -276,7 +283,11 @@ The inner array contains:
    
    /*Go through all the Jobs for a school and add up the FTE*/
    For &A = 1 To &stfJobsResolved.Len
-      
+      		/*Reset some variables on each loop*/
+		&nPosAbsence = 0;
+		&nActivePosFTE = 0;
+		&nPosVacancy = 0;
+		
       /*See if there is any existing pos info for this job*/
       &posIndex = &certPosArray.Find(&stfJobsResolved [&A][1]);
       
@@ -289,9 +300,10 @@ The inner array contains:
          /*Make sure that the person has not been priority placed by the principle, and is still active*/
          If &stfJobsResolved [&A][6] > 0 And
                &stfJobsResolved [&A][5] = 0 Then
-            /*Check if the position has been deleted in staffing*/
+
             
             If &posIndex > 0 And
+				/*Check if the position has been deleted in staffing*/
                   &certPosArray [&posIndex][6] <> "I" Then
                /*There is at least one absence*/
                &atLeastOneAbscence = 1;
@@ -323,7 +335,7 @@ The inner array contains:
             End-If;
          End-If;
          
-         /*								1							 2			3				4  			5						6							7			*/
+         /*											1				 2			3				4  			5						6							7			*/
          &stfJobCounts.Push(CreateArrayAny(&stfJobsResolved [&A][3], 0, &nActivePosFTE, &nPosVacancy, &nPosAbsence, &stfJobsResolved [&A][4], &stfJobsResolved [&A][5]));
          
          
@@ -364,6 +376,7 @@ The inner array contains:
    
    /*Reset the &nPosVacancy variable*/
    &nPosVacancy = 0;
+   &nPosAbsence = 0;
    
    /*Go through all the positions associated to a school and add up the FTE*/
    /*All of the Positions that are occupied or have an absence have already been added*/
@@ -376,7 +389,7 @@ The inner array contains:
          /*It is part of a JOB which means someone is occupying it*/
          /*Check that there is a person occupying it */
          If &stfJobsResolved [&nPosOccupyIndex][5] > 0 Or
-               &stfJobsResolved [&nPosOccupyIndex][6] Then
+               &stfJobsResolved [&nPosOccupyIndex][6] > 0 Then
             &nPosVacancy = 0;
          End-If;
       Else
