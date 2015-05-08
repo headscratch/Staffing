@@ -361,11 +361,17 @@ The inner array contains:
          &stfJobCounts [&countIndex][5] = &stfJobCounts [&countIndex][5] + &nPosAbsence;
          
          /*Check that the position has no absences or occupies*/
-         If &stfJobsResolved [&A][5] > 0 And
+         If &stfJobsResolved [&A][5] > 0 Or
                &stfJobsResolved [&A][6] > 0 Then
             &nPosVacancy = 0;
          Else
-            &nPosVacancy = &stfJobsResolved [&A][7];
+		 			/*Check if the pos has been deleted, if it has then there is no vacancy*/
+			 If &posIndex > 0 And
+                  &certPosArray [&posIndex][6] <> "I" Then
+               &nPosVacancy = &stfJobsResolved [&A][7];
+            Else
+            &nPosVacancy = 0;
+			end-if;
          End-If;
          
          /*Add to vacant Staff*/

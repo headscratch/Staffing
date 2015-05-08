@@ -135,7 +135,7 @@ The inner array contains:
    /*Fill in the staffing status to be "Y" by default*/
    For &A = 1 To &certHRJobs.ActiveRowCount
       /*Reset Varaibles on each loop*/
-		&sAbsOrVac = "";
+      &sAbsOrVac = "";
       /*If the Effective status isn't Yes than this is an Absence*/
       If &certHRJobs.GetRow(&A).CCS_CJOB_CRT_HR.EFF_STATUS.Value <> "Y" Then
          &sAbsOrVac = "Abs";
@@ -158,9 +158,9 @@ The inner array contains:
    
    /*Fill an array with all of the staffing job rows that have been Approved or are in progress. Overwrite any existing rows with this data*/
    For &A = 1 To &certStfJobsApproved.ActiveRowCount
-   		/*Reset Varaibles on each loop*/
-		&sAbsOrVac = "";
-
+      /*Reset Varaibles on each loop*/
+      &sAbsOrVac = "";
+      
       &emplPosid = &certStfJobsApproved.GetRow(&A).CCS_CJOB_CRT_AP.EMPLID.Value | &certStfJobsApproved.GetRow(&A).CCS_CJOB_CRT_AP.POSITION_NBR.Value;
       &jobIndex = &stfJobs.Find(&emplPosid);
       /*If the Effective status isn't Yes than this is an Vacancy because the only changes that can be done in Staffing are Priority Placements*/
@@ -169,7 +169,7 @@ The inner array contains:
       Else
          &sAbsOrVac = "";
       End-If;
-	  
+      
       &posIndex = &certPosArray.Find(&certStfJobsApproved.GetRow(&A).CCS_CJOB_CRT_AP.POSITION_NBR.Value);
       
       If &posIndex > 0 Then
@@ -198,9 +198,9 @@ The inner array contains:
       &emplPosid = &certStfJobsSaved.GetRow(&A).CCS_CJOB_CRT_SV.EMPLID.Value | &certStfJobsSaved.GetRow(&A).CCS_CJOB_CRT_SV.POSITION_NBR.Value;
       &jobIndex = &stfJobs.Find(&emplPosid);
       
-	  		/*Reset Varaibles on each loop*/
-		&sAbsOrVac = "";
-	  
+      /*Reset Varaibles on each loop*/
+      &sAbsOrVac = "";
+      
       /*If the Effective status isn't Yes than this is an Vacancy because the only changes that can be done in Staffing are Priority Placements*/
       If &certStfJobsSaved.GetRow(&A).CCS_CJOB_CRT_SV.EFF_STATUS.Value <> "Y" Then
          &sAbsOrVac = "Vac";
@@ -248,8 +248,6 @@ The inner array contains:
                
                &stfJobsResolved [&countIndex][7] = &stfJobsResolved [&countIndex][7] + &stfJobs [&A][3];
             End-If;
-            /*It is an absence so we'll add to the absence total for this position*/
-            &stfJobsResolved [&countIndex][6] = &stfJobsResolved [&countIndex][6] + &stfJobs [&A][3];
             
          Else
             /*It is an active occupy so we'll add to the occupy  total for this position*/
@@ -275,7 +273,7 @@ The inner array contains:
             If &stfJobs [&A][7] = "Vac" Then
                
                /*Position has an absent occupy*/
-               /*											1					2				3					4		 5  6        	7		*/
+               /*											1					2				3					4		5  6        	7		*/
                &stfJobsResolved.Push(CreateArrayAny(&stfJobs [&A][6], &stfJobs [&A][3], &stfJobs [&A][4], &stfJobs [&A][5], 0, 0, &stfJobs [&A][3]));
             End-If;
             
@@ -292,12 +290,12 @@ The inner array contains:
    
    /*Go through all the Jobs for a school and add up the FTE*/
    For &A = 1 To &stfJobsResolved.Len
-		/*Reset some variables on each loop*/
-		&nPosAbsence = 0;
-		&nActivePosFTE = 0;
-		&nPosVacancy = 0;
-
-		/*See if there is any existing pos info for this job*/
+      /*Reset some variables on each loop*/
+      &nPosAbsence = 0;
+      &nActivePosFTE = 0;
+      &nPosVacancy = 0;
+      
+      /*See if there is any existing pos info for this job*/
       &posIndex = &certPosArray.Find(&stfJobsResolved [&A][1]);
       
       /*See if the allocation cat already has a row started for it*/
@@ -365,11 +363,17 @@ The inner array contains:
          /*Add to absent staff*/
          &stfJobCounts [&countIndex][5] = &stfJobCounts [&countIndex][5] + &nPosAbsence;
          /*Check that the position has no absences or occupies*/
-         If &stfJobsResolved [&A][5] > 0 And
+         If &stfJobsResolved [&A][5] > 0 Or
                &stfJobsResolved [&A][6] > 0 Then
             &nPosVacancy = 0;
          Else
-            &nPosVacancy = &stfJobsResolved [&A][7];
+            /*Check if the pos has been deleted, if it has then there is no vacancy*/
+            If &posIndex > 0 And
+                  &certPosArray [&posIndex][6] <> "I" Then
+               &nPosVacancy = &stfJobsResolved [&A][7];
+            Else
+               &nPosVacancy = 0;
+            End-If;
          End-If;
          
          /*Add to vacant Staff*/
