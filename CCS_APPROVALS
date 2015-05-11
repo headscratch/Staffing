@@ -92,8 +92,10 @@ method BuildApprovalList
    Local number &nRelTranIndex;
    Local number &nPrevTranIndex;
    Local number &nTempPosId;
-   Local number &nTempEmplId;
+
    Local number &nTempEmplRcd;
+   
+   Local string &sTempEmplId;
    
    Local boolean &bExistingJobData;
    Local boolean &bExistingPosData;
@@ -261,7 +263,6 @@ method BuildApprovalList
          If &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
             If &recPrevTransaction.CCS_STF_ACTION.Value = "T" Or
                   
-                  
                   &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
                
                &recCurrentRecord.CopyFieldsTo(&recPrev_APRV_VW);
@@ -284,7 +285,6 @@ method BuildApprovalList
             &nPrevTranIndex = - 1;
          End-If;
          
-         
          &recTempNEW_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
          &rNew_APRV_VW.CopyFieldsTo(&recTempNEW_APRV_VW);
          &arrRelatedTransaction.Push(CreateArrayAny(&recCurrentRecord.CCS_TRANSACT_NBR.Value, &nPrevTranIndex, &recTempNEW_APRV_VW));
@@ -298,7 +298,6 @@ method BuildApprovalList
       End-If;
       
       If &recCurrentRecord.CCS_STA_APPROVAL.Value = "P" Then
-         
          
          /*Fill in the New rows of the approval request*/
          
@@ -348,19 +347,21 @@ method BuildApprovalList
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "S";
          End-If;
          
-         &nTempPosId = &rTempCCS_DERIVED_APR.CCS_STF_POS_ID.Value;
-         &nTempEmplId = &rTempCCS_DERIVED_APR.EMPLID.Value;
-         &nTempEmplRcd = &rTempCCS_DERIVED_APR.EMPL_RCD.Value;
+         &nTempPosId = &rNew_APRV_VW.CCS_STF_POS_ID.Value;
+
+         &sTempEmplId = &rNew_APRV_VW.EMPLID.Value;
+         &nTempEmplRcd = &rNew_APRV_VW.EMPL_RCD.Value;
          
          
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
                &recCurrentRecord.CCS_STF_ACTION.Value = "T" Then
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "T";
             /*Find the occupy dates for the position transfer*/
-            SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &nTempEmplId, &nTempEmplRcd, &dOccupyDate);
-			if all (&dOccupyDate) Then
-				&rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
-			end-if;
+            SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &sTempEmplId, &nTempEmplRcd, &dOccupyDate);
+            If All(&dOccupyDate) Then
+               &rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
+
+            End-If;
          End-If;
          
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
@@ -371,12 +372,13 @@ method BuildApprovalList
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Job" And
                &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
             &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "P";
-			            /*Find the occupy dates for the position transfer*/
-            SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &nTempEmplId, &nTempEmplRcd, &dOccupyDate);
-			if all (&dOccupyDate) Then
-				&rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
-			end-if;
-			
+            /*Find the occupy dates for the position transfer*/
+            SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &sTempEmplId, &nTempEmplRcd, &dOccupyDate);
+            If All(&dOccupyDate) Then
+               &rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
+
+            End-If;
+            
          End-If;
          
          If &recCurrentRecord.CCS_CHANGE_TYPE.Value = "Position" And
@@ -869,3 +871,4 @@ method GetPreviousPosInfo
    Return &recPrevRecord;
 end-method;
 
+ 
