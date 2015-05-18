@@ -1,0 +1,480 @@
+Component number &firstView;
+
+Local Rowset &rowsetSchBal;
+Local Rowset &supAllocs;
+Local Rowset &supPositions;
+Local Rowset &supHRJobs;
+Local Rowset &supStfJobsApproved;
+Local Rowset &supStfJobsSaved;
+
+Local array of array of any &supJobsHRArray;
+Local array of array of any &supPosArray;
+Local array of array of any &stfJobs;
+Local array of array of any &stfJobsResolved;
+Local array of array of any &stfJobCounts;
+Local array of array of string &colLabels;
+
+Local Grid &gridBal;
+
+Local number &schoolYear;
+Local number &I;
+Local number &rowCount;
+Local number &newAllocTot;
+Local number &existAllocTot;
+Local number &activeStaffTot;
+Local number &activePosTot;
+Local number &vacantStaffTot;
+Local string &emplPosid;
+Local number &jobIndex;
+Local number &posIndex;
+Local number &countIndex;
+Local number &A;
+Local number &UsedAllocations;
+Local number &atLeastOneVacancy;
+Local number &atLeastOneAbscence;
+
+Local string &AllocID;
+Local SQL &Sql;
+
+Local Rowset &level0;
+Local Record &recDerived;
+
+
+/*Only want to do this stuff the first time the page is loaded*/
+If &firstView = 0 Then
+   &firstView = 1;
+   
+   /*The inner array on this nested array holds the following position data
+1) Position_NBR,
+2) STD_HOURS,
+3) CCS_STF_ALLOC_CAT
+4) Allocation Catgegory Description
+5) Jobcode*/
+   &supPosArray = CreateArrayRept(CreateArray(), 0);
+   
+   /*This array holds the consolidated job data from staffing it is a nested array*/
+   /*The inner array contains:
+1) the Position Number concatenated with the Empl ID to act as a key,
+2) the current active status of the employee from HR, 
+3) the status of the employee from Staffing based on priority placement status,
+4) the STD_HOURS of the position, 
+5) and the supificated Allocation Category for the position
+6) Allocation Category Description
+7) Position Number*/
+   &stfJobs = CreateArrayRept(CreateArray(), 0);
+   
+   /*This array is used to count up the STD_HOURS for jobs for the school
+The inner array contains:
+1) supificated Allocation Category
+2) Existing Allocations/Positions
+3) Active Staff
+4) Vacant Postions
+5) Absent positions
+6) Allocation Category Description
+7) Active Staff in Positions*/
+   &stfJobCounts = CreateArrayRept(CreateArray(), 0);
+   
+   /*This array is used to determine the final occupancy/ Empl_status of a position.
+It's required for positions that have multiple people filling them, with some of the people on leave, 
+and some Active
+1) the Position Number
+2) the current active status of the employee from HR, 
+3) the status of the employee from Staffing based on priority placement status,
+4) the fte of the position, 
+5) and the Certificated Allocation Category for the position
+6) Allocation Category Description
+7) Count of active employees in a position*/
+   &stfJobsResolved = CreateArrayRept(CreateArray(), 0);
+   
+   /*sup Allocation totals from schools*/
+   &supAllocs = CreateRowset(Record.CCS_SUPPUB_CSUM);
+   
+   /*Consolidated Position data from HR and Staffing*/
+   &supPositions = CreateRowset(Record.CCS_CPOS_SUP_BL);
+   
+   /*Job data from HR*/
+   &supHRJobs = CreateRowset(Record.CCS_CJOB_SUP_HR);
+   /*Approved Principal Job changes from Staffing*/
+   &supStfJobsApproved = CreateRowset(Record.CCS_CJOB_SUP_AP);
+   /*Saved Principal Job changes from Staffing*/
+   &supStfJobsSaved = CreateRowset(Record.CCS_CJOB_SUP_SV);
+   
+   SQLExec(" SELECT CCS_SCHOOL_YEAR,CCS_SCHOOL_YR_NUM FROM PS_CCS_STFCNTL_HDR WHERE CCS_SCH_YEAR_STAT = :1 ", "C", CCS_DERIVED_ALO.CCS_SCHOOL_YEAR.Value, &schoolYear);
+   CCS_DERIVED_ALO.CCS_SCH_DESCR_LOC.Value = CCS_STF_SCH_TBL.DESCR.Value | " (" | CCS_STF_SCH_TBL.LOCATION | ")";
+   
+   
+   
+   &supAllocs.Fill("WHERE CCS_SCHOOL_YR_NUM = :1 AND LOCATION=:2 ORDER BY CCS_ALLOCATION_PRI DESC", &schoolYear, CCS_STF_SCH_TBL.LOCATION);
+   &supPositions.Fill("WHERE LOCATION=:1", CCS_STF_SCH_TBL.LOCATION);
+   &supStfJobsApproved.Fill("WHERE LOCATION=:1", CCS_STF_SCH_TBL.LOCATION);
+   &supStfJobsSaved.Fill("WHERE LOCATION=:1", CCS_STF_SCH_TBL.LOCATION);
+   &supHRJobs.Fill("WHERE LOCATION=:1", CCS_STF_SCH_TBL.LOCATION);
+   
+   &rowsetSchBal = GetLevel0()(1).GetRowset(Scroll.CCS_STF_BAL_TST);
+   
+   
+   For &A = 1 To &supPositions.ActiveRowCount
+      If (&supPositions.GetRow(&A).CCS_CPOS_SUP_BL.CCS_STF_ALLOC_CAT.Value <> "") Then
+         &supPosArray [&A] = CreateArrayAny(&supPositions.GetRow(&A).CCS_CPOS_SUP_BL.POSITION_NBR.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.STD_HOURS.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.CCS_STF_ALLOC_CAT.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.DESCR.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.JOBCODE.Value);
+      Else
+         /*There is no allocation category in staffing for this position so use the positions JOBCODE as the Allocation Category*/
+         /*This will happen for active positions in a school that have been retired, and are no longer allocated for*/
+         &supPosArray [&A] = CreateArrayAny(&supPositions.GetRow(&A).CCS_CPOS_SUP_BL.POSITION_NBR.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.STD_HOURS.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.JOBCODE.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.CCS_JOB_DESCR.Value, &supPositions.GetRow(&A).CCS_CPOS_SUP_BL.JOBCODE.Value);
+      End-If;
+   End-For;
+   
+   
+   /*Get job data from HR, Approved Staffing Changes, and then Saved Staffing changes*/
+   /*Each proceeding data overwrites the existing data*/
+   
+   /*Go through all the HR Job data for the school and push it into a master array of the STD_HOURS for each position at a school*/
+   /*Fill in the staffing status to be "Y" by default*/
+   For &A = 1 To &supHRJobs.ActiveRowCount
+      &posIndex = &supPosArray.Find(&supHRJobs.GetRow(&A).CCS_CJOB_SUP_HR.POSITION_NBR.Value);
+      If &posIndex > 0 Then
+         &stfJobs [&A] = CreateArrayAny(&supHRJobs.GetRow(&A).CCS_CJOB_SUP_HR.EMPLID.Value | &supHRJobs.GetRow(&A).CCS_CJOB_SUP_HR.POSITION_NBR.Value, &supHRJobs.GetRow(&A).CCS_CJOB_SUP_HR.EFF_STATUS.Value, "Y", &supPosArray [&posIndex][2], &supPosArray [&posIndex][3], &supPosArray [&posIndex][4], &supHRJobs.GetRow(&A).CCS_CJOB_SUP_HR.POSITION_NBR.Value);
+      End-If;
+   End-For;
+   
+   /*Fill an array with all of the staffing job rows that have been Approved or are in progress. Overwrite any existing rows with this data*/
+   For &A = 1 To &supStfJobsApproved.ActiveRowCount
+      &emplPosid = &supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.EMPLID.Value | &supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.POSITION_NBR.Value;
+      &jobIndex = &stfJobs.Find(&emplPosid);
+      If &jobIndex = 0 Then
+         /*No HR data for this job so create an entry for it. This data only exists in Staffing currently. Will use the staffing status for both HR and Staffing employee status*/
+         &posIndex = &supPosArray.Find(&supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.POSITION_NBR.Value);
+         If &posIndex > 0 Then
+            &stfJobs.Push(CreateArrayAny(&emplPosid, &supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.EFF_STATUS.Value, &supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.EFF_STATUS.Value, &supPosArray [&posIndex][2], &supPosArray [&posIndex][3], &supPosArray [&posIndex][4], &supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.POSITION_NBR.Value));
+         Else
+            
+         End-If;
+      Else
+         &stfJobs [&jobIndex][3] = &supStfJobsApproved.GetRow(&A).CCS_CJOB_SUP_AP.EFF_STATUS.Value;
+      End-If;
+   End-For;
+   
+   /*Fill an array with all of the staffing job rows that have been saved but not submitted to HR yet. Overwrite any existing rows with this data*/
+   For &A = 1 To &supStfJobsSaved.ActiveRowCount
+      
+      &emplPosid = &supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.EMPLID.Value | &supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.POSITION_NBR.Value;
+      
+      &jobIndex = &stfJobs.Find(&emplPosid);
+      If &jobIndex = 0 Then
+         /*No HR or approved staffing data for this job so create an entry for it. This data only exists as a principle saved change. Will use the staffing status for both HR and Staffing employee status*/
+         &posIndex = &supPosArray.Find(&supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.POSITION_NBR.Value);
+         
+         If &posIndex > 0 Then
+            &stfJobs.Push(CreateArrayAny(&emplPosid, &supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.EFF_STATUS.Value, &supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.EFF_STATUS.Value, &supPosArray [&posIndex][2], &supPosArray [&posIndex][3], &supPosArray [&posIndex][4], &supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.POSITION_NBR.Value));
+         Else
+            
+         End-If;
+      Else
+         &stfJobs [&jobIndex][3] = &supStfJobsSaved.GetRow(&A).CCS_CJOB_SUP_SV.EFF_STATUS.Value;
+      End-If;
+   End-For;
+   
+   
+   /*Go through all the positions associated to a school and add up the STD_HOURS*/
+   /*This is for positions at school regardless of if they are occupied or not*/
+   For &A = 1 To &supPosArray.Len
+      &countIndex = &stfJobCounts.Find(&supPosArray [&A][3]);
+      If &countIndex = 0 Then
+         /*If there is no row for the Allocation category of this position create one and store the STD_HOURS of this position*/
+         &stfJobCounts.Push(CreateArrayAny(&supPosArray [&A][3], &supPosArray [&A][2], 0, 0, 0, &supPosArray [&A][4], 0));
+      Else
+         /*Row already exists for this allocation category so just add this positions STD_HOURS to it*/
+         &stfJobCounts [&countIndex][2] = &stfJobCounts [&countIndex][2] + &supPosArray [&A][2];
+      End-If;
+   End-For;
+   
+   /*Go through the occupied positions and see if there is an active person in them, or if they are just filled with absent people*/
+   For &A = 1 To &stfJobs.Len
+      &countIndex = &stfJobsResolved.Find(&stfJobs [&A][7]);
+      If &countIndex > 0 Then
+         /*If the position has an occupy with an active HR Status we will leave it alone, if it doesn't we will set it's HR Status*/
+         If &stfJobsResolved [&countIndex][2] <> "Y" Then
+            &stfJobsResolved [&countIndex][2] = &stfJobs [&A][2];
+         End-If;
+         /*If the position has an occupy with an active Staffing Status we will leave it alone, if it doesn't we will set it's staffing Status*/
+         If &stfJobsResolved [&countIndex][3] <> "Y" Then
+            &stfJobsResolved [&countIndex][3] = &stfJobs [&A][3];
+         End-If;
+         
+         
+         If &stfJobsResolved [&countIndex][2] = "Y" And
+               &stfJobsResolved [&countIndex][3] = "Y" Then
+            /*This is the second time an active employee has been found in a position so we will add them to the count of active employees
+			  in this position*/
+            &stfJobsResolved [&countIndex][7] = &stfJobsResolved [&countIndex][7] + &stfJobs [&A][4];
+         End-If;
+      Else
+         /*Position hasn't been processed yet so create a new entry for it in the array*/
+         If &stfJobs [&A][2] = "Y" And
+               &stfJobs [&A][3] = "Y" Then
+            /*Check if the position has an active occupy in both staffing and HR. If it does add it to the active staff in position */
+            &stfJobsResolved.Push(CreateArrayAny(&stfJobs [&A][7], &stfJobs [&A][2], &stfJobs [&A][3], &stfJobs [&A][4], &stfJobs [&A][5], &stfJobs [&A][6], &stfJobs [&A][4]));
+         Else
+            &stfJobsResolved.Push(CreateArrayAny(&stfJobs [&A][7], &stfJobs [&A][2], &stfJobs [&A][3], &stfJobs [&A][4], &stfJobs [&A][5], &stfJobs [&A][6], 0));
+         End-If;
+      End-If;
+   End-For;
+   
+   
+   /*Go through all the Jobs for a school and add up the STD_HOURS*/
+   For &A = 1 To &stfJobsResolved.Len
+      /*See if the allocation cat already has a row started for it*/
+      &countIndex = &stfJobCounts.Find(&stfJobsResolved [&A][5]);
+      
+      If &countIndex = 0 Then
+         
+         /*If there is no row for the Allocation category of this position create one and store the STD_HOURS of this position*/
+         /*Make sure that the person has not been priority placed by the principle, and is still active*/
+         If &stfJobsResolved [&A][3] = "Y" Then
+            
+            /*Check What the HR status of the person is*/
+            If &stfJobsResolved [&A][2] = "Y" Then
+               /*Add to exisiting allocations and Active Staff*/
+               &stfJobCounts.Push(CreateArrayAny(&stfJobsResolved [&A][5], &stfJobsResolved [&A][4], &stfJobsResolved [&A][4], 0, 0, &stfJobsResolved [&A][6], &stfJobsResolved [&A][7]));
+               
+            Else
+               /*Add to exisiting allocations and Absent Position*/
+               &atLeastOneAbscence = 1;
+               &stfJobCounts.Push(CreateArrayAny(&stfJobsResolved [&A][5], &stfJobsResolved [&A][4], 0, 0, &stfJobsResolved [&A][4], &stfJobsResolved [&A][6], 0));
+            End-If;
+            
+         Else
+            /*Add to existing Allocations and Vacant position*/
+            &atLeastOneAbscence = 1;
+            &stfJobCounts.Push(CreateArrayAny(&stfJobsResolved [&A][5], &stfJobsResolved [&A][4], 0, 0, &stfJobsResolved [&A][4], &stfJobsResolved [&A][6], 0));
+         End-If;
+         
+      Else
+         /*Row already exists for this allocation category so just add this positions STD_HOURS to it*/
+         /*Make sure that the person has not been priority placed by the principle, and is still active*/
+         If &stfJobsResolved [&A][3] = "Y" Then
+            /*Check What the HR status of the person is*/
+            If &stfJobsResolved [&A][2] = "Y" Then
+               /*Add to Active Staff*/
+               &stfJobCounts [&countIndex][3] = &stfJobCounts [&countIndex][3] + &stfJobsResolved [&A][4];
+               &stfJobCounts [&countIndex][7] = &stfJobCounts [&countIndex][7] + &stfJobsResolved [&A][7];
+            Else
+               /*Add to Absent Position*/
+               &atLeastOneAbscence = 1;
+               &stfJobCounts [&countIndex][5] = &stfJobCounts [&countIndex][5] + &stfJobsResolved [&A][4];
+            End-If;
+         Else
+            /*Vacant Position because of Priority Placement. Do nothing, will be calculated by Total Positions - Active Staff */
+            
+         End-If;
+         
+      End-If;
+   End-For;
+   
+   
+   /*Need to check for an allocation or an existing jobcode count greater than 0 before adding a row to the the grid*/
+   
+   For &I = 1 To &supAllocs.ActiveRowCount
+      &countIndex = &stfJobCounts.Find(&supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_ALLOC_CAT.Value);
+      If &countIndex > 0 Then
+         /*The school has existing positions or jobs for the allocation*/
+         &rowsetSchBal(1).CCS_STF_BAL_TST.JOBCODE.Value = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_ALLOC_CAT.Value;
+         &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Label = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_ALLOC_CAT.Value;
+         &rowsetSchBal(1).CCS_STF_BAL_TST.DESCR.Value = &stfJobCounts [&countIndex][6];
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_GEN_ALLOC.Value;
+         
+         &rowsetSchBal(1).CCS_STF_BAL_TST.STD_HOURS.Value = &stfJobCounts [&countIndex][2];
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_HRS.Value = &stfJobCounts [&countIndex][7];
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_ACTV.Value = &stfJobCounts [&countIndex][3];
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_ABS_HRS.Value = &stfJobCounts [&countIndex][5];
+         
+         If &stfJobCounts [&countIndex][5] > 0 Then
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Label = &stfJobCounts [&countIndex][5];
+         Else
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Visible = False;
+         End-If;
+         
+         /*Figure out the vacant positions by taking the existing positions and subtracting the total staff(Active + Absent) for a school*/
+         &vacantStaffTot = &rowsetSchBal(1).CCS_STF_BAL_TST.STD_HOURS.Value - (&rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_HRS.Value + &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_ABS_HRS.Value);
+         If (&vacantStaffTot > 0) Then
+            &atLeastOneVacancy = 1;
+            &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_VAC_HRS.Value = &vacantStaffTot;
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Label = &vacantStaffTot | "";
+         Else
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Visible = False;
+         End-If;
+         /*Do all the variance*/
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_VAR_ALLOC.Value = &rowsetSchBal(1).CCS_STF_BAL_TST.STD_HOURS.Value - &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value;
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_VAR_EMPL.Value = &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_HRS.Value - &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value;
+         
+         &rowsetSchBal.InsertRow(0);
+         
+         &UsedAllocations = &UsedAllocations + 1;
+         /*Clear out the count for this position because it has been added to the page already*/
+         &stfJobCounts [&countIndex] = Null;
+         
+      Else
+         
+         /*School is allocated a new jobcode that they have no existing staff or position for*/
+         If &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_GEN_ALLOC.Value <> 0 Then
+            &rowsetSchBal(1).CCS_STF_BAL_TST.JOBCODE.Value = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_ALLOC_CAT.Value;
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Label = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_ALLOC_CAT.Value;
+            /*Set the vacancy links to invisible so that they don't show the default label*/
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Visible = False;
+            &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Visible = False;
+            
+            &rowsetSchBal(1).CCS_STF_BAL_TST.DESCR.Value = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.DESCR.Value;
+            &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value = &supAllocs.GetRow(&I).CCS_SUPPUB_CSUM.CCS_STF_GEN_ALLOC.Value;
+            
+            /*Do all the variance*/
+            &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_VAR_ALLOC.Value = 0 - &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value;
+            &rowsetSchBal.InsertRow(0);
+            
+         End-If;
+         
+      End-If;
+   End-For;
+   
+   /*Re-sort the JobCoutns array so that that the empty/already counted rows are at the end*/
+   &stfJobCounts.Sort("D");
+   /*Then chop off all the rows of the array that are empty*/
+   &stfJobCounts.Len = &stfJobCounts.Len - &UsedAllocations;
+   
+   /*Fill in rows on the balance grid for positions that are for allocations that are no longer used*/
+   While &stfJobCounts.Len > 0
+      &rowsetSchBal(1).CCS_STF_BAL_TST.JOBCODE.Value = &stfJobCounts [1][1];
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Label = &stfJobCounts [1][1];
+      
+      &rowsetSchBal(1).CCS_STF_BAL_TST.DESCR.Value = &stfJobCounts [1][6];
+      &rowsetSchBal(1).CCS_STF_BAL_TST.STD_HOURS.Value = &stfJobCounts [1][2];
+      &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_HRS.Value = &stfJobCounts [1][7];
+      &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_ACTV.Value = &stfJobCounts [1][3];
+      &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_ABS_HRS.Value = &stfJobCounts [1][5];
+      If &stfJobCounts [1][5] > 0 Then
+         &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Label = &stfJobCounts [1][5];
+      Else
+         &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Visible = False;
+      End-If;
+      
+      
+      /*Figure out the vacant positions by taking the existing positions and subtracting the total staff(Active + Absent) for a school*/
+      &vacantStaffTot = &rowsetSchBal(1).CCS_STF_BAL_TST.STD_HOURS.Value - (&rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_HRS.Value + &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_ABS_HRS.Value);
+      If (&vacantStaffTot > 0) Then
+         &atLeastOneVacancy = 1;
+         &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_VAC_HRS.Value = &vacantStaffTot;
+         &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Label = &vacantStaffTot | "";
+      Else
+         &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Visible = False;
+      End-If;
+      /*Do all the variance*/
+      &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_VAR_ALLOC.Value = &rowsetSchBal(1).CCS_STF_BAL_TST.STD_HOURS.Value - &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value;
+      &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_VAR_EMPL.Value = &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_POS_HRS.Value - &rowsetSchBal(1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value;
+      
+      &rowsetSchBal.InsertRow(0);
+      &stfJobCounts.Shift();
+   End-While;
+   
+   /*Delete the first row which will b empty*/
+   &rowsetSchBal.DeleteRow(1);
+   
+   &rowCount = &rowsetSchBal.ActiveRowCount;
+   
+   /*Calc totals for the New Allocaitons, Existing Allocation, and Active Staff Columns*/
+   For &I = 1 To &rowsetSchBal.ActiveRowCount
+      &newAllocTot = &newAllocTot + &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value;
+      &existAllocTot = &existAllocTot + &rowsetSchBal(&I).CCS_STF_BAL_TST.STD_HOURS.Value;
+      &activeStaffTot = &activeStaffTot + &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_POS_HRS.Value;
+      &activePosTot = &activePosTot + &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_POS_ACTV.Value;
+      
+      
+      If (&rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_STF_VAR_ALLOC.Value > 0) Then
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_ALLOC_OU.Value = "O";
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_ALLOC_OU.Style = "CCS_STF_OVER";
+      End-If;
+      If (&rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_STF_VAR_ALLOC.Value < 0) Then
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_ALLOC_OU.Value = "U";
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_ALLOC_OU.Style = "CCS_STF_UNDER";
+      End-If;
+      
+      If (&rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_STF_VAR_EMPL.Value > 0) Then
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_EE_OU.Value = "O";
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_EE_OU.Style = "CCS_STF_OVER";
+      End-If;
+      If (&rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_STF_VAR_EMPL.Value < 0) Then
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_EE_OU.Value = "U";
+         &rowsetSchBal(&I).CCS_STF_BAL_TST.CCS_EE_OU.Style = "CCS_STF_UNDER";
+      End-If;
+      
+   End-For;
+   
+   
+   
+   
+   /*Insert an empty row after all of the positions for the school and fill it with totals 
+that were calculated above. */
+   
+   If &rowsetSchBal(&rowCount).CCS_STF_BAL_TST.JOBCODE.Value <> "" Then
+      
+      &rowsetSchBal.InsertRow(&rowCount);
+      
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.JOBCODE.Value = "Total";
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.JOBCODE.Style = "STRONG";
+      
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Enabled = False;
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Label = "Total";
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Style = "STRONG";
+      
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Value = &newAllocTot;
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.CCS_STF_GEN_ALLOC.Style = "STRONG";
+      
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.STD_HOURS.Value = &existAllocTot;
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.STD_HOURS.Style = "STRONG";
+      
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.CCS_POS_HRS.Value = &activeStaffTot;
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.CCS_POS_HRS.Style = "STRONG";
+      
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.CCS_POS_ACTV.Value = &activePosTot;
+      &rowsetSchBal(&rowCount + 1).CCS_STF_BAL_TST.CCS_POS_ACTV.Style = "STRONG";
+      
+      
+   Else
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CLIST_LINK.Style = "PTTRANSPARENT";
+      
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Label = " ";
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Visible = True;
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Style = "PTTRANSPARENT";
+      
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Label = " ";
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Visible = True;
+      &rowsetSchBal(1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Style = "PTTRANSPARENT";
+   End-If;
+   
+   
+   
+   /*Hides the staff list link on the last row of the table if there were vacancy or absences, if there weren't any just make the last row transparent, otherwise the vacancy and abscence columns disappear*/
+   
+   If (&atLeastOneVacancy >= 1) Then
+      
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Visible = False;
+      
+   Else
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Label = " ";
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CVAC_LINK.Style = "PTTRANSPARENT";
+      
+   End-If;
+   
+   If (&atLeastOneAbscence >= 1) Then
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Visible = False;
+   Else
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Label = " ";
+      &rowsetSchBal(&rowCount + 1).CCS_DERIVED_STA.CCS_SUP_CABS_LINK.Style = "PTTRANSPARENT";
+   End-If;
+End-If;
+
+
+/*Fix the label for the column of jobcode links*/
+
+&colLabels = CreateArray(CreateArray("CCS_SUP_CLIST_LINK", "Job Class"));
+&colLabels.Push(CreateArray("CCS_SUP_CVAC_LINK", "   Vacant Positions (Hours) Due to No Employee Occupy"));
+&colLabels.Push(CreateArray("CCS_SUP_CABS_LINK", "Vacant Positions (Hours) Due to Employee Abscence"));
+&gridBal = GetGrid(Page.CCS_STF_SUP_BAL, "CCS_STF_BAL_TST");
+&gridBal.LabelColumns(&colLabels);
