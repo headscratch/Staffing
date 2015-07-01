@@ -8,9 +8,10 @@ class CCS_APPROVAL_SAVE
    method SAVE_APPROVALS();
    method COMMIT_APPROVALS(&rsApprovals As Rowset, &sStaffType As string);
    method COMMIT_PRIORITY_PLACEMENT(&rowPriorityPlacement As Row, &sStaffType As string, &sApprovalStat As string);
-   method COMMIT_WORKLIST_ITEM(&rowWorkItem As Row, &sStaffType As string, &sApprovalStat As string);
-   method COMMIT_WORKLIST_TRANSFER(&rowWorkItem As Row, &sStaffType As string, &sApprovalStat As string);
-   
+   method COMMIT_POS_WORKLIST_ITEM(&rowApprovalItem As Row, &sStaffType As string, &sApprovalStat As string);
+   method COMMIT_JOB_WORKLIST_ITEM(&rowApprovalItem As Row, &sStaffType As string, &sApprovalStat As string, &rStaffingRecord As Record);
+   method COMMIT_WORKLIST_TRANSFER(&rowApprovalItem As Row, &sStaffType As string, &sApprovalStat As string, &sCurRowAction As string);
+   method COMMIT_JOB_RECORD(&sPosNbr As string, &nTranNbr As number, &sEmplid As string, &sApprovalStat As string) Returns Record;
    property array of number aRowsetRecordHash;
    property array of Record aRowsetRecords;
    
@@ -163,9 +164,13 @@ method COMMIT_APPROVALS
    
    
    Local number &nArrIndex;
-   Local boolean &bSaveResult;
-   Local string &sApprovalStat;
+   Local number &nTnum;
    
+   Local string &sApprovalStat;
+   Local string &sEid;
+   Local string &sPnum;
+   
+   Local boolean &bSaveResult;
    
    For &nArrIndex = 1 To &rsApprovals.ActiveRowCount
       
@@ -194,11 +199,6 @@ method COMMIT_APPROVALS
                   &sApprovalStat = "A";
                End-If;
                
-               /*Check if this change has been approved and needs to be actioned*/
-               If &sApprovalStat = "A" Then
-                  %This.COMMIT_WORKLIST_ITEM(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat);
-               End-If;
-               
                /*Check that the new value for the approval stat is different 
 			than what's already in the DB*/
                If &rStfPos.CCS_STA_APPROVAL.Value <> &sApprovalStat Then
@@ -207,58 +207,79 @@ method COMMIT_APPROVALS
                   CommitWork();
                End-If;
                
+               %This.COMMIT_POS_WORKLIST_ITEM(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat);
+               
             End-If;
          End-If;
          
          If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value = "Job" Then
             
-            /*Populate the CCS_EE_JOB_STF keys*/
             
-            &rStfJob.CCS_SCHOOL_YR_NUM.Value = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value;
-            &rStfJob.LOCATION.Value = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.LOCATION.Value;
-            &rStfJob.SETID.Value = "CRCSS";
-            &rStfJob.EMPLID.Value = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.EMPLID.Value;
-            &rStfJob.EMPL_RCD.Value = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.EMPL_RCD.Value;
-            &rStfJob.EFFDT.Value = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.EFFDT.Value;
-            &rStfJob.CCS_STF_POS_ID.Value = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_STF_POS_ID.Value;
+            If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_APPRV_STAT_CAN.Value = "R" Then
+               &sApprovalStat = "R";
+            End-If;
+            If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "A" Then
+               &sApprovalStat = "A";
+            End-If;
             
-            /*See if a row exists*/
-            If &rStfJob.SelectByKey() Then
-               If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_APPRV_STAT_CAN.Value = "R" Then
-                  &sApprovalStat = "R";
-               End-If;
-               If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "A" Then
-                  &sApprovalStat = "A";
-               End-If;
+            &nTnum = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+            &sEid = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.EMPLID.Value;
+            &sPnum = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.POSITION_NBR.Value;
+            
+            
+            /*Check if this is a surplus action that has been approved*/
+            If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value = "P" Then
                
-               /*See if this is change is approved and needs to be actioned*/
-               If &sApprovalStat = "A" Then
-                  /*Check if this is a surplus action that has been approved*/
-                  If &rStfJob.CCS_STF_SURPLUS_PP.Value = "P" Then
+               &rStfJob = %This.COMMIT_JOB_RECORD(&sPnum, &nTnum, &sEid, &sApprovalStat);
+               If &rStfJob.EMPLID.Value <> "" Then
+                  
+                  %This.COMMIT_PRIORITY_PLACEMENT(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat);
+                  
+               End-If;
+               /*Not a priority placement just a normal change*/
+            Else
+               
+               
+               /*See if this is a transfer*/
+               If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "T" Then
+                  
+                  /*Do the old position that they are being transferred out of first*/
+                  &nTnum = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+                  &sEid = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.EMPLID.Value;
+                  &sPnum = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_CUR_POS_NBR.Value;
+                  
+                  &rStfJob = %This.COMMIT_JOB_RECORD(&sPnum, &nTnum, &sEid, &sApprovalStat);
+                  If &rStfJob.EMPLID.Value <> "" Then
                      
-                     %This.COMMIT_PRIORITY_PLACEMENT(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat);
+                     %This.COMMIT_JOB_WORKLIST_ITEM(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat, &rStfJob);
                      
-                     /*Not a priority placement just a normal change*/
-                  Else
+                  End-If;
+                  
+                  /*Do the old position that they are being transferred into next*/
+                  &nTnum = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+                  &sEid = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.EMPLID.Value;
+                  &sPnum = &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_NEW_POS_NBR.Value;
+                  
+                  &rStfJob = %This.COMMIT_JOB_RECORD(&sPnum, &nTnum, &sEid, &sApprovalStat);
+                  If &rStfJob.EMPLID.Value <> "" Then
                      
-                     %This.COMMIT_WORKLIST_ITEM(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat);
+                     %This.COMMIT_JOB_WORKLIST_ITEM(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat, &rStfJob);
                      
-                     /*See if this is a transfer*/
-                     If &rsApprovals(&nArrIndex).CCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = "T" Then
-                        
-                     End-If;
-                     
+                  End-If;
+                  
+               Else
+                  
+                  
+                  &rStfJob = %This.COMMIT_JOB_RECORD(&sPnum, &nTnum, &sEid, &sApprovalStat);
+                  
+                  
+                  If &rStfJob.EMPLID.Value <> "" Then
+                     %This.COMMIT_JOB_WORKLIST_ITEM(&rsApprovals(&nArrIndex), &sStaffType, &sApprovalStat, &rStfJob);
                   End-If;
                End-If;
                
-               /*Check that the new value for the approval stat is different 
-			than what's already in the DB*/
-               If &rStfJob.CCS_STA_APPROVAL.Value <> &sApprovalStat Then
-                  &rStfJob.CCS_STA_APPROVAL.Value = &sApprovalStat;
-                  &rStfJob.Update();
-                  CommitWork();
-               End-If;
             End-If;
+            
          End-If;
       End-If;
    End-For;
@@ -280,37 +301,38 @@ method COMMIT_PRIORITY_PLACEMENT
    If &sStaffType = "Support" Then
       &rStfPriorityPlacement = CreateRecord(Record.CCS_SUP_SURPLUS);
    End-If;
-   
-   
-   &rStfPriorityPlacement.CCS_STF_POS_ID.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_POS_ID.Value;
-   &rStfPriorityPlacement.EFFDT.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EFFDT.Value;
-   &rStfPriorityPlacement.EMPL_RCD.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EMPL_RCD.Value;
-   &rStfPriorityPlacement.LOCATION.Value = &rowPriorityPlacement.CCS_DERIVED_APR.LOCATION.Value;
-   &rStfPriorityPlacement.EMPLID.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EMPLID.Value;
-   &rStfPriorityPlacement.FTE.Value = &rowPriorityPlacement.CCS_DERIVED_APR.FTE.Value;
-   &rStfPriorityPlacement.CCS_SCHOOL_YR_NUM.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value;
-   &rStfPriorityPlacement.CCS_CHANGE_TYPE.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
-   &rStfPriorityPlacement.CCS_APPROVAL_STAT.Value = &sApprovalStat;
-   &rStfPriorityPlacement.CCS_STA_APPROVAL.Value = &sApprovalStat;
-   &rStfPriorityPlacement.CCS_COMBINED_FTE.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
-   &rStfPriorityPlacement.CCS_STF_SURPLUS_PP.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value;
-   &rStfPriorityPlacement.CCS_STF_ACTION.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_ACTION.Value;
-   &rStfPriorityPlacement.CCS_STF_ALLOC_CAT.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_ALLOC_CAT.Value;
-   &rStfPriorityPlacement.CCS_TRANSACT_NBR.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
-   &rStfPriorityPlacement.EMPL_CLASS.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EMPL_CLASS.Value;
-   
-   &rStfPriorityPlacement.LASTUPDDTTM.Value = %Datetime;
-   &rStfPriorityPlacement.LASTUPDOPRID.Value = %OperatorId;
-   &rStfPriorityPlacement.Insert();
-   CommitWork();
-   
+   /*See if this is change is approved and needs to be actioned*/
+   If &sApprovalStat = "A" Then
+      
+      &rStfPriorityPlacement.CCS_STF_POS_ID.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_POS_ID.Value;
+      &rStfPriorityPlacement.EFFDT.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EFFDT.Value;
+      &rStfPriorityPlacement.EMPL_RCD.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EMPL_RCD.Value;
+      &rStfPriorityPlacement.LOCATION.Value = &rowPriorityPlacement.CCS_DERIVED_APR.LOCATION.Value;
+      &rStfPriorityPlacement.EMPLID.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EMPLID.Value;
+      &rStfPriorityPlacement.FTE.Value = &rowPriorityPlacement.CCS_DERIVED_APR.FTE.Value;
+      &rStfPriorityPlacement.CCS_SCHOOL_YR_NUM.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value;
+      &rStfPriorityPlacement.CCS_CHANGE_TYPE.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
+      &rStfPriorityPlacement.CCS_APPROVAL_STAT.Value = &sApprovalStat;
+      &rStfPriorityPlacement.CCS_STA_APPROVAL.Value = &sApprovalStat;
+      &rStfPriorityPlacement.CCS_COMBINED_FTE.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
+      &rStfPriorityPlacement.CCS_STF_SURPLUS_PP.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value;
+      &rStfPriorityPlacement.CCS_STF_ACTION.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_ACTION.Value;
+      &rStfPriorityPlacement.CCS_STF_ALLOC_CAT.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_STF_ALLOC_CAT.Value;
+      &rStfPriorityPlacement.CCS_TRANSACT_NBR.Value = &rowPriorityPlacement.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+      &rStfPriorityPlacement.EMPL_CLASS.Value = &rowPriorityPlacement.CCS_DERIVED_APR.EMPL_CLASS.Value;
+      
+      &rStfPriorityPlacement.LASTUPDDTTM.Value = %Datetime;
+      &rStfPriorityPlacement.LASTUPDOPRID.Value = %OperatorId;
+      &rStfPriorityPlacement.Insert();
+      CommitWork();
+   End-If;
 end-method;
 
 
 
 
-method COMMIT_WORKLIST_ITEM
-   /+ &rowWorkItem as Row, +/
+method COMMIT_POS_WORKLIST_ITEM
+   /+ &rowApprovalItem as Row, +/
    /+ &sStaffType as String, +/
    /+ &sApprovalStat as String +/
    
@@ -325,44 +347,113 @@ method COMMIT_WORKLIST_ITEM
    If &sStaffType = "Support" Then
       &rStfWorkList = CreateRecord(Record.CCS_STF_WORKLST);
    End-If;
+   /*See if this is change is approved and needs to be actioned*/
+   If &sApprovalStat = "A" Then
+      &rStfWorkList.CCS_STF_POS_ID.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_STF_POS_ID.Value;
+      &rStfWorkList.EFFDT.Value = &rowApprovalItem.CCS_DERIVED_APR.EFFDT.Value;
+      &rStfWorkList.EMPL_RCD.Value = &rowApprovalItem.CCS_DERIVED_APR.EMPL_RCD.Value;
+      &rStfWorkList.LOCATION.Value = &rowApprovalItem.CCS_DERIVED_APR.LOCATION.Value;
+      &rStfWorkList.EMPLID.Value = &rowApprovalItem.CCS_DERIVED_APR.EMPLID.Value;
+      &rStfWorkList.FTE.Value = &rowApprovalItem.CCS_DERIVED_APR.FTE.Value;
+      &rStfWorkList.CCS_SCHOOL_YR_NUM.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value;
+      &rStfWorkList.CCS_CHANGE_TYPE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
+      &rStfWorkList.CCS_APPROVAL_STAT.Value = &sApprovalStat;
+      &rStfWorkList.CCS_STA_APPROVAL.Value = &sApprovalStat;
+      &rStfWorkList.CCS_COMBINED_FTE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
+      &rStfWorkList.CCS_STF_SURPLUS_PP.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value;
+      &rStfWorkList.CCS_STF_ACTION.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_STF_ACTION.Value;
+      &rStfWorkList.CCS_STF_ALLOC_CAT.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_STF_ALLOC_CAT.Value;
+      &rStfWorkList.CCS_TRANSACT_NBR.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+      &rStfWorkList.CCS_REQUEST_TYPE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_REQUEST_TYPE.Value;
+      
+      &rStfWorkList.LASTUPDDTTM.Value = %Datetime;
+      &rStfWorkList.LASTUPDOPRID.Value = %OperatorId;
+      &rStfWorkList.Insert();
+      CommitWork();
+   End-If;
+end-method;
+
+method COMMIT_JOB_WORKLIST_ITEM
+   /+ &rowApprovalItem as Row, +/
+   /+ &sStaffType as String, +/
+   /+ &sApprovalStat as String, +/
+   /+ &rStaffingRecord as Record +/
    
-   &rStfWorkList.CCS_STF_POS_ID.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_POS_ID.Value;
-   &rStfWorkList.EFFDT.Value = &rowWorkItem.CCS_DERIVED_APR.EFFDT.Value;
-   &rStfWorkList.EMPL_RCD.Value = &rowWorkItem.CCS_DERIVED_APR.EMPL_RCD.Value;
-   &rStfWorkList.LOCATION.Value = &rowWorkItem.CCS_DERIVED_APR.LOCATION.Value;
-   &rStfWorkList.EMPLID.Value = &rowWorkItem.CCS_DERIVED_APR.EMPLID.Value;
-   &rStfWorkList.FTE.Value = &rowWorkItem.CCS_DERIVED_APR.FTE.Value;
-   &rStfWorkList.CCS_SCHOOL_YR_NUM.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value;
-   &rStfWorkList.CCS_CHANGE_TYPE.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
-   &rStfWorkList.CCS_APPROVAL_STAT.Value = &sApprovalStat;
-   &rStfWorkList.CCS_STA_APPROVAL.Value = &sApprovalStat;
-   &rStfWorkList.CCS_COMBINED_FTE.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
-   &rStfWorkList.CCS_STF_SURPLUS_PP.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value;
-   &rStfWorkList.CCS_STF_ACTION.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_ACTION.Value;
-   &rStfWorkList.CCS_STF_ALLOC_CAT.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_ALLOC_CAT.Value;
-   &rStfWorkList.CCS_TRANSACT_NBR.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+   Local Record &rStfWorkList;
    
-   &rStfWorkList.LASTUPDDTTM.Value = %Datetime;
-   &rStfWorkList.LASTUPDOPRID.Value = %OperatorId;
-   &rStfWorkList.Insert();
-   CommitWork();
+   /*Does the same thing right now
+  but will be changed in the future*/
+   If &sStaffType = "Certificated" Then
+      &rStfWorkList = CreateRecord(Record.CCS_STF_WORKLST);
+   End-If;
    
+   If &sStaffType = "Support" Then
+      &rStfWorkList = CreateRecord(Record.CCS_STF_WORKLST);
+   End-If;
+   
+   
+   /*See if this is change is approved and needs to be actioned*/
+   If &sApprovalStat = "A" Then
+      &rStfWorkList.CCS_STF_POS_ID.Value = &rStaffingRecord.CCS_STF_POS_ID.Value;
+      &rStfWorkList.EFFDT.Value = &rStaffingRecord.EFFDT.Value;
+      &rStfWorkList.EMPL_RCD.Value = &rStaffingRecord.EMPL_RCD.Value;
+      &rStfWorkList.LOCATION.Value = &rStaffingRecord.LOCATION.Value;
+      &rStfWorkList.EMPLID.Value = &rStaffingRecord.EMPLID.Value;
+      &rStfWorkList.FTE.Value = &rowApprovalItem.CCS_DERIVED_APR.FTE.Value;
+      &rStfWorkList.CCS_SCHOOL_YR_NUM.Value = &rStaffingRecord.CCS_SCHOOL_YR_NUM.Value;
+      &rStfWorkList.CCS_CHANGE_TYPE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
+      &rStfWorkList.CCS_APPROVAL_STAT.Value = &sApprovalStat;
+      &rStfWorkList.CCS_STA_APPROVAL.Value = &sApprovalStat;
+      &rStfWorkList.CCS_COMBINED_FTE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
+      &rStfWorkList.CCS_STF_SURPLUS_PP.Value = &rStaffingRecord.CCS_STF_SURPLUS_PP.Value;
+      &rStfWorkList.CCS_STF_ACTION.Value = &rStaffingRecord.CCS_STF_ACTION.Value;
+      &rStfWorkList.CCS_STF_ALLOC_CAT.Value = &rStaffingRecord.CCS_STF_ALLOC_CAT.Value;
+      &rStfWorkList.CCS_TRANSACT_NBR.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+      &rStfWorkList.CCS_REQUEST_TYPE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_REQUEST_TYPE.Value;
+      &rStfWorkList.LASTUPDDTTM.Value = %Datetime;
+      &rStfWorkList.LASTUPDOPRID.Value = %OperatorId;
+      &rStfWorkList.Insert();
+      CommitWork();
+   End-If;
 end-method;
 
 
 
 method COMMIT_WORKLIST_TRANSFER
-   /+ &rowWorkItem as Row, +/
+   /+ &rowApprovalItem as Row, +/
    /+ &sStaffType as String, +/
-   /+ &sApprovalStat as String +/
+   /+ &sApprovalStat as String, +/
+   /+ &sCurRowAction as String +/
+   
+   /*This function commits the removal part of the Transfer*/
    
    Local Record &rStfWorkList;
-   Local Record &rTransfer;
+   Local Record &rTransferJob;
+   
+   Local number &nTransactNumber;
+   Local string &sEmpId;
+   Local string &sLoc;
+   Local string &sStfAction;
    
    
-   &rTransfer = CreateRecord(Record.CCS_EE_JOB_STF);
-   /*Does the same thing right now
-  but will be changed in the future*/
+   
+   &rTransferJob = CreateRecord(Record.CCS_EE_JOB_STF);
+   
+   
+   &nTransactNumber = &rowApprovalItem.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
+   &sEmpId = &rowApprovalItem.CCS_DERIVED_APR.EMPLID.Value;
+   &sLoc = &rowApprovalItem.CCS_DERIVED_APR.CCS_NEW_LOCATION.Value;
+   
+   If &sCurRowAction = "R" Then
+      &sStfAction = "T";
+   End-If;
+   
+   If &sCurRowAction = "T" Then
+      &sStfAction = "R";
+   End-If;
+   
+   SQLExec("SELECT * from PS_CCS_EE_JOB_STF WHERE CCS_STF_ACTION = :1 AND CCS_TRANSACT_NBR = :2 AND EMPLID = :3 AND LOCATION = :4 ", &sStfAction, &nTransactNumber, &sEmpId, &sLoc, &rTransferJob);
+   
    If &sStaffType = "Certificated" Then
       &rStfWorkList = CreateRecord(Record.CCS_STF_WORKLST);
    End-If;
@@ -371,26 +462,75 @@ method COMMIT_WORKLIST_TRANSFER
       &rStfWorkList = CreateRecord(Record.CCS_STF_WORKLST);
    End-If;
    
-   &rStfWorkList.CCS_STF_POS_ID.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_POS_ID.Value;
-   &rStfWorkList.EFFDT.Value = &rowWorkItem.CCS_DERIVED_APR.EFFDT.Value;
-   &rStfWorkList.EMPL_RCD.Value = &rowWorkItem.CCS_DERIVED_APR.EMPL_RCD.Value;
-   &rStfWorkList.LOCATION.Value = &rowWorkItem.CCS_DERIVED_APR.LOCATION.Value;
-   &rStfWorkList.EMPLID.Value = &rowWorkItem.CCS_DERIVED_APR.EMPLID.Value;
-   &rStfWorkList.FTE.Value = &rowWorkItem.CCS_DERIVED_APR.FTE.Value;
-   &rStfWorkList.CCS_SCHOOL_YR_NUM.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_SCHOOL_YR_NUM.Value;
-   &rStfWorkList.CCS_CHANGE_TYPE.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
-   &rStfWorkList.CCS_APPROVAL_STAT.Value = &sApprovalStat;
-   &rStfWorkList.CCS_STA_APPROVAL.Value = &sApprovalStat;
-   &rStfWorkList.CCS_COMBINED_FTE.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
-   &rStfWorkList.CCS_STF_SURPLUS_PP.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_SURPLUS_PP.Value;
-   &rStfWorkList.CCS_STF_ACTION.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_ACTION.Value;
-   &rStfWorkList.CCS_STF_ALLOC_CAT.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_STF_ALLOC_CAT.Value;
-   &rStfWorkList.CCS_TRANSACT_NBR.Value = &rowWorkItem.CCS_DERIVED_APR.CCS_TRANSACT_NBR.Value;
    
-   &rStfWorkList.LASTUPDDTTM.Value = %Datetime;
-   &rStfWorkList.LASTUPDOPRID.Value = %OperatorId;
-   &rStfWorkList.Insert();
-   CommitWork();
+   If &rTransferJob.CCS_STF_POS_ID.Value <> "" Then
+      /*No exisiting staffing job record for this change*/
+      /*See if this is change is approved and needs to be actioned*/
+      If &sApprovalStat = "A" Then
+         
+         /*Save the worklist item*/
+         &rStfWorkList.CCS_STF_POS_ID.Value = &rTransferJob.CCS_STF_POS_ID.Value;
+         &rStfWorkList.EFFDT.Value = &rTransferJob.EFFDT.Value;
+         &rStfWorkList.EMPL_RCD.Value = &rTransferJob.EMPL_RCD.Value;
+         &rStfWorkList.LOCATION.Value = &sLoc;
+         &rStfWorkList.EMPLID.Value = &sEmpId;
+         &rStfWorkList.FTE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_CUR_FTE.Value;
+         &rStfWorkList.CCS_COMBINED_FTE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_COMBINED_FTE.Value;
+         &rStfWorkList.CCS_SCHOOL_YR_NUM.Value = &rTransferJob.CCS_SCHOOL_YR_NUM.Value;
+         &rStfWorkList.CCS_CHANGE_TYPE.Value = &rowApprovalItem.CCS_DERIVED_APR.CCS_CHANGE_TYPE.Value;
+         &rStfWorkList.CCS_APPROVAL_STAT.Value = &sApprovalStat;
+         &rStfWorkList.CCS_STA_APPROVAL.Value = &sApprovalStat;
+         &rStfWorkList.CCS_STF_ACTION.Value = &rTransferJob.CCS_STF_ACTION.Value;
+         &rStfWorkList.CCS_STF_ALLOC_CAT.Value = &rTransferJob.CCS_STF_ALLOC_CAT.Value;
+         &rStfWorkList.CCS_TRANSACT_NBR.Value = &nTransactNumber;
+         &rStfWorkList.CCS_REQUEST_TYPE.Value = &rTransferJob.CCS_REQUEST_TYPE.Value;
+         &rStfWorkList.LASTUPDDTTM.Value = %Datetime;
+         &rStfWorkList.LASTUPDOPRID.Value = %OperatorId;
+         &rStfWorkList.Insert();
+         CommitWork();
+         
+      End-If;
+      
+      
+   End-If;
    
+   
+   
+   
+end-method;
+
+
+method COMMIT_JOB_RECORD
+   /+ &sPosNbr as String, +/
+   /+ &nTranNbr as Number, +/
+   /+ &sEmplid as String, +/
+   /+ &sApprovalStat as String +/
+   /+ Returns Record +/
+   
+   
+   Local Record &rStfJob;
+   
+   Local boolean &bRecSaved;
+   
+   &bRecSaved = False;
+   
+   &rStfJob = CreateRecord(Record.CCS_EE_JOB_STF);
+   
+   SQLExec("SELECT A.* FROM  PS_CCS_EE_JOB_STF A INNER JOIN PS_CCS_STF_POSN_ID B ON A.CCS_STF_POS_ID = B.CCS_STF_POS_ID  WHERE B.POSITION_NBR = :1 AND A.CCS_TRANSACT_NBR = :2 AND EMPLID = :3 ", &sPosNbr, &nTranNbr, &sEmplid, &rStfJob);
+   /*Populate the CCS_EE_JOB_STF keys*/
+   
+   If &rStfJob.EMPLID.Value <> "" Then
+      /*Check that the new value for the approval stat is different 
+			than what's already in the DB*/
+      &bRecSaved = True;
+      
+      If &rStfJob.CCS_STA_APPROVAL.Value <> &sApprovalStat Then
+         &rStfJob.CCS_STA_APPROVAL.Value = &sApprovalStat;
+         &rStfJob.Update();
+         CommitWork();
+      End-If;
+   End-If;
+   
+   Return &rStfJob;
 end-method;
 

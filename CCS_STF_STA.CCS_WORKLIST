@@ -4,6 +4,9 @@ import CCS_STF_STA:*;
 
 class CCS_WORKLIST
    method CCS_WORKLIST();
+   method BuildWorkListArrays();
+   method BuildPosDataArray(&sSqlName As string) Returns array of array of any;
+   method BuildJobDataArray(&sSqlName As string) Returns array of array of array of any;
    method BuildWorkList() Returns Rowset;
    method SetLocation(&sLOCATION As string);
    method SetEmplid(&sEMPLID As string);
@@ -12,22 +15,88 @@ class CCS_WORKLIST
    method JobGetActualRow(&rApprvlRecord As Record) Returns Record;
    method GetCurrentPosInfo(&recCurRow As Record, &recActualRow As Record) Returns Record;
    method GetPreviousPosInfo(&recCurRow As Record) Returns Record;
+   method WalkArray(&arrDataArray As array of array of any, &nStartingIndex As number, &nID As string, &dtCutOffDate As date) Returns number;
+   method WalkArrayPosition(&arrDataArray As array of array of any, &nStartingIndex As number, &nID As string, &dtCutOffDate As date, &nTransactNbr As number) Returns number;
+   method GetPosData(&recData As Record);
+   method GetPreviousPosData(&recData As Record);
+   method GetJobData(&arrRecData As array of Record);
+   method SetUpEmplClass(&sEmplId As string, &sEmplClass As string);
+   method GetEmplClass(&sEmplId As string) Returns string;
+   method PopulateEmplOccupyArray(&recData As Record);
+   method getEmplCombinedFTE(&recData As Record) Returns number;
    
+   property Rowset rsWorkListRows;
    
    property string WhereClause;
    property string LOCATION;
    property string EMPLID;
+   
    property number CCS_STF_POS_ID;
+   
    property array of array of any aEMPLID;
    property array of array of any aPOSITION_NBR;
    property array of array of any aPOSITION_INFO;
    property array of array of any aActualEMPL;
    property array of array aActualPOS;
    
+   property array of array of any aPosWorklistItems;
+   property array of array of any aJobWorklistItems;
+   property array of array of any aEmplStory;
+   
+   property array of array of any aHrJobDataPast;
+   property array of array of any aHrJobDataFut;
+   property array of array of any aStaffingJobData;
+   
+   property array of array of any aHrJobDataPastPosIndex;
+   property array of array of any aHrJobDataFutPosIndex;
+   property array of array of any aStaffingJobDataPosIndex;
+   
+   property array of array of any aHrPosDataPast;
+   property array of array of any aHrPosDataFut;
+   property array of array of any aStaffingPosData;
+   
+   property array of array of any aEmplClass;
+   
+   /*Array of EMPLS that are not part of a job change, but are affected by a position change*/
+   property array of string aIndirectEmpls;
+   
+   /*Holds each Empls Pos occupy and FTE for that occupy grouped by EFFDT*/
+   property array of array of array of array of any aEmplOccupies;
+   
+   
+   /*Inner Array contains and EFFDT and an Index for the Employees Occupies on that EFFDT*/
+   /*The Inner Array is grouped into a parent array which represents an EMPLID*/
+   /*The outer array contains all of these EMPLID arrays*/
+   /*&aEffdtOccupiesIndex[EMPL_ID][Index][1] = EFFDT, &aEffdtOccupiesIndex[EMPL_ID][Index][2] = PositionOccupyIndex*/
+   property array of array of array of any aEffdtOccupiesIndex;
+   
+   /*Array of EMPLIDs the index of the EMPLID will point to the entry in the &aEffdtOccupiesIndex
+   That has all of the EFFDT's important to the Employees occupies*/
+   property array of string aEmplIdOccupiesIndex;
+   
+   
+   /*Array of Job Changes that were created to reflect to occupies of a changed position*/
+   property array of array of any aEmplJobPosChanges;
+   
+   /*An array of Position Changes that shouldn't be displayed*/
+   property array of string aHiddenPosChanges;
+   
+   
 end-class;
 
 method CCS_WORKLIST
+   Local array of array of any &arrTempDataArray;
+   Local array of array of array of any &arrTempJobReturnDataArray;
+   
+   &rsWorkListRows = CreateRowset(Record.CCS_STF_WORK_VW);
+   &rsWorkListRows.Fill(&WhereClause | " ORDER BY EMPLID, EFFDT DESC");
+   
    &WhereClause = "";
+   
+   &aEmplOccupies = CreateArrayRept(CreateArrayRept(CreateArrayRept(CreateArrayAny(), 0), 0), 0);
+   &aEffdtOccupiesIndex = CreateArrayRept(CreateArrayRept(CreateArrayAny(), 0), 0);
+   &aEmplIdOccupiesIndex = CreateArrayRept("", 0);
+   &aIndirectEmpls = CreateArrayRept("", 0);
    
    /*&aEMPLID is 2 dimension array the first element of sub-array is the EMPLID 
 	and the other elements are POSITION_NBRs associated to the EMPLID*/
@@ -42,7 +111,330 @@ method CCS_WORKLIST
    &aActualPOS = CreateArrayRept(CreateArrayAny(), 0);
    &aActualEMPL = CreateArrayRept(CreateArrayAny(CreateArrayAny()), 0);
    
+   &aEmplClass = CreateArrayRept(CreateArrayAny(), 0);
+   
+   
+   &aEmplJobPosChanges = CreateArrayRept(CreateArrayAny(), 0);
+   
+   &aHiddenPosChanges = CreateArrayRept("", 0);
+   
+   /*Create the worklist array*/
+   %This.BuildWorkListArrays();
+   
+   
+   /*Have to fill Position Data first and then Job Data*/
+   
+   /*Fill all the Position Data Arrays*/
+   /*Get Approved Staffing Pos Info*/
+   &arrTempDataArray = %This.BuildPosDataArray("CCS_STF_POS_APR_SQL");
+   &aStaffingPosData = &arrTempDataArray.Clone();
+   
+   /*Get Past HR Position Data*/
+   &arrTempDataArray = %This.BuildPosDataArray("CCS_HR_POS_PAST_SQL");
+   &aHrPosDataPast = &arrTempDataArray.Clone();
+   
+   /*Get Future HR Position Data*/
+   &arrTempDataArray = %This.BuildPosDataArray("CCS_HR_POS_FUT_SQL");
+   &aHrPosDataFut = &arrTempDataArray.Clone();
+   
+   /*Fill all the Job Data Arrays*/
+   /*Must be done in this order so that Combined FTE can be calculated*/
+   /*Get Past HR Job Data*/
+   &arrTempJobReturnDataArray = %This.BuildJobDataArray("CCS_HR_JOB_PAST_SQL");
+   &aHrJobDataPast = &arrTempJobReturnDataArray [1].Clone();
+   &aHrJobDataPastPosIndex = &arrTempJobReturnDataArray [2].Clone();
+   
+   /*Get Future HR Job Data*/
+   &arrTempJobReturnDataArray = %This.BuildJobDataArray("CCS_HR_JOB_FUT_SQL");
+   &aHrJobDataFut = &arrTempJobReturnDataArray [1].Clone();
+   &aHrJobDataFutPosIndex = &arrTempJobReturnDataArray [2].Clone();
+   
+   /*Get approved Staffing Job Data*/
+   &arrTempJobReturnDataArray = %This.BuildJobDataArray("CCS_STF_JOB_APR_SQL");
+   &aStaffingJobData = &arrTempJobReturnDataArray [1].Clone();
+   &aStaffingJobDataPosIndex = &arrTempJobReturnDataArray [2].Clone();
+   
+   
+   
 end-method;
+
+method BuildWorkListArrays
+   
+   /*Create an array of Job worklist items and 
+	an array of Pos Worklist items*/
+   
+   Local Record &recWorkListItem;
+   
+   Local number &nI;
+   Local number &nExistingEmplPosChangeIndex;
+   
+   Local array of any &arrWorkItem;
+   Local array of any &aPosChangeSub;
+   
+   &aPosWorklistItems = CreateArrayRept(CreateArrayAny(), 0);
+   &aJobWorklistItems = CreateArrayRept(CreateArrayAny(), 0);
+   
+   &recWorkListItem = CreateRecord(Record.CCS_STF_WORK_VW);
+   
+   For &nI = 1 To &rsWorkListRows.RowCount
+      
+      &recWorkListItem = &rsWorkListRows(&nI).CCS_STF_WORK_VW;
+      
+      If &recWorkListItem.CCS_CHANGE_TYPE.Value = "Job" Then
+         &arrWorkItem = CreateArrayAny(&recWorkListItem.EMPLID.Value, &recWorkListItem.EFFDT.Value, &recWorkListItem);
+         &aJobWorklistItems.Push(&arrWorkItem);
+         /*Store if this is a Job Change created from a position change*/
+         If &recWorkListItem.CCS_REQUEST_TYPE.Value = "C" Then
+            /*Mark that it exists by it's TR*/
+            &nExistingEmplPosChangeIndex = &aEmplJobPosChanges.Find(&recWorkListItem.EMPLID.Value);
+            If &nExistingEmplPosChangeIndex > 0 Then
+               /*already an entry for this EMPLID so append to it the transaction of the pos change occupy*/
+               &aEmplJobPosChanges [&nExistingEmplPosChangeIndex].Push(&recWorkListItem.CCS_TRANSACT_NBR.Value)
+            Else
+               /*Create a new entry for this empl*/
+               &aPosChangeSub = CreateArrayAny(&recWorkListItem.EMPLID.Value, &recWorkListItem.CCS_TRANSACT_NBR.Value);
+               &aEmplJobPosChanges.Push(&aPosChangeSub);
+            End-If;
+         End-If;
+         
+      End-If;
+      
+      If &recWorkListItem.CCS_CHANGE_TYPE.Value = "Position" Then
+         &arrWorkItem = CreateArrayAny(&recWorkListItem.POSITION_NBR.Value, &recWorkListItem.EFFDT.Value, &recWorkListItem);
+         &aPosWorklistItems.Push(&arrWorkItem);
+      End-If;
+      
+      
+      &recWorkListItem = CreateRecord(Record.CCS_STF_WORK_VW);
+   End-For;
+   
+   
+end-method;
+
+method BuildJobDataArray
+   /+ &sSqlName as String +/
+   /+ Returns Array3 of Any +/
+   
+   /*Fills an array with Job Data from HR or Staffing*/
+   
+   /*Can't be run until the Pos Data arrays have been filled*/
+   
+   Local Record &recData;
+   Local Record &recScrapRecord;
+   Local number &nPosWorklistIndex;
+   Local number &nJobWorklistIndex;
+   Local number &nPosIndex;
+   Local number &nDataPosI;
+   Local number &nIndirectEmplsIndex;
+   Local number &nScrapDataIndex;
+   Local number &nI;
+   
+   Local string &sDataRecordName;
+   
+   Local boolean &bFigureOutEmplClass;
+   
+   Local array of array of array of any &aReturnArray;
+   Local array of array of any &aDataArray;
+   
+   /* Consists of a POSITION_NBR or EMPLID, the EFFDT, and the associated row of data saved as a record
+	1) EMPLID
+	2) EFFDT
+	3) Data as record
+   */
+   Local array of any &aDataElement;
+   
+   /*Array for indexing the Job Data Rows by Position Number*/
+   /*Inner array 
+	1) POSITION_NBR
+	2) Row number of Job Data with this Pos number
+	3) ... more row numbers of Job data  
+	*/
+   Local array of array of any &aDataPosIndex;
+   
+   
+   
+   Local array of array of any &aScrapJobData;
+   
+   Local array of any &aScrapJobElement;
+   
+   Local SQL &sqlDataQuery;
+   
+   /*Figure out if we're going through past HR data*/
+   If &sSqlName = "CCS_HR_JOB_PAST_SQL" Then
+      /*We are so we'll figure out the EMPL_CLASS for each employee as we 
+	go through the data later*/
+      &bFigureOutEmplClass = True;
+   Else
+      &bFigureOutEmplClass = False;
+   End-If;
+   
+   
+   &aDataArray = CreateArrayRept(CreateArrayAny(), 0);
+   &aDataPosIndex = CreateArrayRept(CreateArrayAny(), 0);
+   
+   
+   
+   &aScrapJobData = CreateArrayRept(CreateArrayAny(), 0);
+   
+   &sDataRecordName = "RECORD.CCS_STF_JOB_DRV";
+   
+   &recData = CreateRecord(Record.CCS_STF_JOB_DRV);
+   
+   &sqlDataQuery = CreateSQL(@("SQL." | &sSqlName));
+   
+   While &sqlDataQuery.Fetch(&recData)
+      
+      /*Check if this Job data is related to one of the employees on the worklist items*/
+      &nJobWorklistIndex = &aJobWorklistItems.Find(&recData.EMPLID.Value);
+      
+      /*Check if this Job data is related to one of the position changes on the worklist items*/
+      &nPosWorklistIndex = &aPosWorklistItems.Find(&recData.POSITION_NBR.Value);
+      
+      If &nJobWorklistIndex > 0 Or
+            &nPosWorklistIndex > 0 Then
+         /*This Job row is related to either a Job or Position change*/
+         If &bFigureOutEmplClass = True Then
+            /*Figure out the the EMPL_CLASS for the employee*/
+            %This.SetUpEmplClass(&recData.EMPLID.Value, &recData.EMPL_CLASS.Value);
+         End-If;
+         
+         If &nJobWorklistIndex > 0 Then
+            /*This Job Record is related to a worklist item so we'll get it's position data
+		 and account for it in the person Combined FTE*/
+            %This.GetPosData(&recData);
+            %This.PopulateEmplOccupyArray(&recData);
+         End-If;
+         
+         &aDataElement = CreateArrayAny(&recData.EMPLID.Value, &recData.EFFDT.Value, &recData);
+         &aDataArray.Push(&aDataElement);
+         
+         If &nPosWorklistIndex > 0 Then
+            /*Need to add it's entry to the Position Index Array*/
+            /*Check if there is already an Index entry for the Pos number*/
+            &nDataPosI = &aDataPosIndex.Find(&recData.POSITION_NBR.Value);
+            
+            If &nDataPosI > 0 Then
+               /*Already an entry for this position number so just associate this Job row number with it as well*/
+               &aDataPosIndex [&nDataPosI].Push(&aDataArray.Len);
+               
+               /*This is an Employee who occupies a changed position 
+			   but is not directly on the worklist*/
+               If &nJobWorklistIndex = 0 Then
+                  
+                  /*Figure out if this person has already been recorded*/
+                  &nIndirectEmplsIndex = &aIndirectEmpls.Find(&recData.EMPLID.Value);
+                  
+                  If &nIndirectEmplsIndex > 0 Then
+                     %This.GetPosData(&recData);
+                     %This.PopulateEmplOccupyArray(&recData);
+                  Else
+                     /*This indirect EMPL hasn't been processed yet*/
+                     &aIndirectEmpls.Push(&recData.EMPLID.Value);
+                     
+                     /*Check the scrap data for any other job records that relate to this employee*/
+                     &nScrapDataIndex = &aScrapJobData.Find(&recData.EMPLID.Value);
+                     If &nScrapDataIndex > 0 Then
+                        /*Start at index 2 becuase the first index is reserved for the EMPLID*/
+                        For &nI = 2 To &aScrapJobData [&nScrapDataIndex].Len
+                           /*Push this job data into the Empl Occupy Array*/
+                           
+                           /*Get pos data for each job entry fetched from the scrap data*/
+                           %This.GetPosData(&aScrapJobData [&nScrapDataIndex][&nI]);
+                           
+                           /*Store this employees occupy data*/
+                           %This.PopulateEmplOccupyArray(&aScrapJobData [&nScrapDataIndex][&nI]);
+                        End-For;
+                        /*Remove this EMPLs Job data from the scrap data array*/
+                        &aScrapJobData.Replace(&nScrapDataIndex, 1);
+                     End-If;
+                  End-If;
+               End-If;
+               
+            Else
+               /*Create array of POSITION_NBR, and the current Array position that relates to the Pos number*/
+               &aDataPosIndex.Push(CreateArrayAny(&recData.POSITION_NBR.Value, &aDataArray.Len));
+            End-If;
+            
+         End-If;
+      Else
+         &nIndirectEmplsIndex = &aIndirectEmpls.Find(&recData.EMPLID.Value);
+         If &nIndirectEmplsIndex > 0 Then
+            %This.GetPosData(&recData);
+            %This.PopulateEmplOccupyArray(&recData);
+         Else
+            /*Job Record does not directly relate to an empl or position on the worklist
+			but it might indirectly relate so we'll temporarily store it*/
+            &nScrapDataIndex = &aScrapJobData.Find(&recData.EMPLID.Value);
+            
+            &recScrapRecord = CreateRecord(Record.CCS_STF_JOB_DRV);
+            &recData.CopyFieldsTo(&recScrapRecord);
+            
+            If &nScrapDataIndex > 0 Then
+               /*Entry has already been made for this scrap job so we'll just add to it*/
+               /*
+               &aScrapJobElement = CreateArrayAny(&recData.EMPLID.Value, &recData);
+			   */
+               &aScrapJobData [&nScrapDataIndex].Push(&recScrapRecord);
+            Else
+               /*Scrap data hasn't been recorded yet*/
+               &aScrapJobElement = CreateArrayAny(&recScrapRecord.EMPLID.Value, &recScrapRecord);
+               &aScrapJobData.Push(&aScrapJobElement);
+               
+            End-If;
+         End-If;
+      End-If;
+      &recData = CreateRecord(Record.CCS_STF_JOB_DRV);
+      &aScrapJobElement = CreateArrayAny();
+   End-While;
+   
+   /*Push our two data arrays into our return array*/
+   &aReturnArray = CreateArrayRept(CreateArrayRept(CreateArrayAny(), 0), 0);
+   &aReturnArray.Push(&aDataArray);
+   &aReturnArray.Push(&aDataPosIndex);
+   
+   &sqlDataQuery.Close();
+   Return &aReturnArray;
+end-method;
+
+
+
+method BuildPosDataArray
+   /+ &sSqlName as String +/
+   /+ Returns Array2 of Any +/
+   
+   /*Fills an array with Position Data from HR or Staffing*/
+   
+   Local Record &recData;
+   Local SQL &sqlDataQuery;
+   
+   Local number &nPosWorklistIndex;
+   
+   Local array of array of any &arrDataArray;
+   /* Consists of a POSITION_NBR, the EFFDT, and the associated row of data saved as a record
+	1) POSITION_NBR
+	2) EFFDT
+	3) Data as record
+   */
+   Local array of any &arrDataElement;
+   
+   &arrDataArray = CreateArrayRept(CreateArrayAny(), 0);
+   
+   &sqlDataQuery = CreateSQL(@("SQL." | &sSqlName));
+   
+   &recData = CreateRecord(Record.CCS_STF_POS_DRV);
+   
+   While &sqlDataQuery.Fetch(&recData)
+      
+      &arrDataElement = CreateArrayAny(&recData.POSITION_NBR.Value, &recData.EFFDT.Value, &recData);
+      &arrDataArray.Push(&arrDataElement);
+      &recData = CreateRecord(Record.CCS_STF_POS_DRV);
+      
+   End-While;
+   
+   &sqlDataQuery.Close();
+   Return &arrDataArray;
+end-method;
+
 
 method BuildWorkList
    /+ Returns Rowset +/
@@ -58,18 +450,21 @@ method BuildWorkList
 						If there is no previous */
    
    Local Rowset &rsWorkList;
+   Local Rowset &rsWorkListCopy;
    Local Rowset &rsDisplayWork;
    Local Row &rowTempRow;
    
    Local Record &rTempCCS_DERIVED_WRK;
    
    Local Record &rNew_WORK_VW;
-   Local Record &recPrev_WORK_VW;
+   Local Record &rBaseData;
+   Local Record &rCurrent_WORK_VW;
    Local Record &rActual_WORK_VW;
-   Local Record &recTemp_WORK_VW;
+   Local Record &rTemp_WORK_VW;
+   Local Record &rRemovalRecordTemp;
    
-   Local array of any &aPosSub;
    Local number &i;
+   Local number &nJ;
    Local number &nArrayLength;
    Local number &nDisplayRow;
    Local number &nCombinedFTE;
@@ -77,48 +472,332 @@ method BuildWorkList
    Local number &nPOSITION_NBRIndex;
    Local number &nEMPLIDIndex;
    Local number &nEMPLRCDIndex;
+   Local number &nStartingIndex;
+   Local number &nDataIndex;
+   Local number &nOccupiesIndex;
+   Local number &nRelatedRemovalIndex;
+   Local number &nRowsetActiveRowCount;
+   Local number &nLastRow;
+   Local number &nPosChangeOccupyIndex;
    
    Local boolean &bExistingJobData;
    Local boolean &bExistingPosData;
+   Local boolean &bDisplayRow;
+   Local boolean &bRecordOccupy;
+   Local boolean &bFirstOccupy;
    
    Local datetime &dtEFFDT;
    
    
-   &rsWorkList = CreateRowset(Record.CCS_STF_WORK_VW);
+   Local array of Record &arrPosOccupies;
+   Local array of number &arrRelatedTransfers;
+   Local array of array of any &arrRelatedRemovals;
+   Local array of any &arrRemovalSub;
+   
    &rsDisplayWork = CreateRowset(Record.CCS_DERIVED_WRK);
+   &rsWorkListCopy = CreateRowset(&rsWorkListRows);
    
    &rNew_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
-   
-   
-   &recPrev_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+   &rCurrent_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
    &rActual_WORK_VW = CreateRecord(Record.CCS_DERIVED_WRK);
    
+   &arrPosOccupies = CreateArrayRept(CreateRecord(Record.CCS_STF_WORK_VW), 0);
+   &arrRelatedTransfers = CreateArrayRept(0, 0);
+   &arrRelatedRemovals = CreateArrayRept(CreateArrayAny(), 0);
    
-   &rsWorkList.Fill(&WhereClause | " ORDER BY CCS_STF_POS_ID, EFFDT");
    
-   &aPosSub = CreateArrayAny();
    
    &nDisplayRow = 1;
    
-   For &i = 1 To &rsWorkList.RowCount
+   /*First run through all of the worklist items, will make sure each Position item and Each Job 
+   Item has it's associated Job or Position data*/
+   &nRowsetActiveRowCount = &rsWorkListRows.RowCount;
+   &nLastRow = &rsWorkListRows.RowCount;
+   &rsWorkListRows.CopyTo(&rsWorkListCopy);
+   
+   For &i = 1 To &nRowsetActiveRowCount
       
+      &arrRemovalSub = CreateArrayAny();
+      &rBaseData = CreateRecord(Record.CCS_STF_WORK_VW);
       &rTempCCS_DERIVED_WRK = CreateRecord(Record.CCS_DERIVED_WRK);
       
-      &rNew_WORK_VW = &rsWorkList(&i).CCS_STF_WORK_VW;
+      &rsWorkListRows(&i).CCS_STF_WORK_VW.CopyFieldsTo(&rBaseData);
       
-      If &rNew_WORK_VW.CCS_CHANGE_TYPE.Value = "Job" Then
-         If &rActual_WORK_VW.EMPLID.Value <> &rNew_WORK_VW.EMPLID.Value And
-               &rActual_WORK_VW.EMPL_RCD.Value <> &rNew_WORK_VW.EMPL_RCD.Value Then
-            &rActual_WORK_VW = %This.JobGetActualRow(&rNew_WORK_VW);
+      If &rBaseData.CCS_CHANGE_TYPE.Value = "Job" Then
+         
+         
+         /*Get the position Data for the row*/
+         /*Start with the Staffing Job Data*/
+         %This.GetPosData(&rBaseData);
+         &rsWorkListCopy(&i).CCS_STF_WORK_VW.FTE.Value = &rBaseData.FTE.Value;
+         &rsWorkListCopy(&i).CCS_STF_WORK_VW.JOBCODE.Value = &rBaseData.JOBCODE.Value;
+         
+         
+         
+         /*Capture and store data about removals and transfers that could be related to each other*/
+         If &rBaseData.CCS_REQUEST_TYPE.Value = "R" Then
+            &rRemovalRecordTemp = CreateRecord(Record.CCS_STF_WORK_VW);
+            &rBaseData.CopyFieldsTo(&rRemovalRecordTemp);
+            &arrRemovalSub.Push(&rBaseData.CCS_TRANSACT_NBR.Value, &rRemovalRecordTemp);
+            &arrRelatedRemovals.Push(&arrRemovalSub);
+            
          End-If;
+         
+         If &rBaseData.CCS_REQUEST_TYPE.Value = "T" Then
+            
+            &arrRelatedTransfers.Push(&rBaseData.CCS_TRANSACT_NBR.Value)
+         End-If;
+         
       End-If;
       
-      If &rNew_WORK_VW.CCS_CHANGE_TYPE.Value = "Position" Then
-         If &rActual_WORK_VW.POSITION_NBR.Value <> &rNew_WORK_VW.POSITION_NBR.Value Then
-            &rActual_WORK_VW = %This.PosGetActualRow(&rNew_WORK_VW);
-         End-If;
+      
+      If &rBaseData.CCS_CHANGE_TYPE.Value = "Position" Then
+         /*Seed the array that get's passed to the Get Job Data function*/
+         /*This array will be returned filled with Jobs that relate to this position*/
+         &arrPosOccupies = CreateArrayRept(CreateRecord(Record.CCS_STF_WORK_VW), 0);
+         &arrPosOccupies.Push(&rBaseData);
+         %This.GetJobData(&arrPosOccupies);
+         
+         /*&bFirstOccupy is used to indicate the first occupy added to the worklist*/
+         &bFirstOccupy = True;
+         For &nOccupiesIndex = 1 To &arrPosOccupies.Len
+            /*Becuase this position change has occupies we will hide the underlying pos change row and just show the related job changes*/
+            &aHiddenPosChanges.Push(&rBaseData.POSITION_NBR.Value);
+            &bRecordOccupy = True;
+            /*Check if this occupy has already been recorded as a job change*/
+            &nPosChangeOccupyIndex = &aEmplJobPosChanges.Find(&arrPosOccupies [&nOccupiesIndex].EMPLID.Value);
+            If &nPosChangeOccupyIndex > 0 Then
+               For &nJ = 2 To &aEmplJobPosChanges [&nPosChangeOccupyIndex].Len
+                  /*Go through the related occupies and see if this one is already recorded*/
+                  If &aEmplJobPosChanges [&nPosChangeOccupyIndex][&nJ] = &arrPosOccupies [&nOccupiesIndex].CCS_TRANSACT_NBR.Value Then
+                     /*occupy is already recorded so don't add it to the worklist again*/
+                     &bRecordOccupy = False;
+                  End-If;
+               End-For;
+            Else
+               /*No recorded yet so add this occupy to the worklist*/
+               &bRecordOccupy = True;
+            End-If;
+            If &bRecordOccupy = True Then
+               /*Update the Combined FTE array to reflect this position change*/
+               %This.PopulateEmplOccupyArray(&arrPosOccupies [&nOccupiesIndex]);
+               
+               /*If this is the first occupy overwrite the already exisiting row in the rowset with it*/
+               If &bFirstOccupy = True Then
+                  &arrPosOccupies [&nOccupiesIndex].CopyFieldsTo(&rsWorkListCopy(&i).CCS_STF_WORK_VW);
+                  /*Change the worklist type to Job because that's what it is*/
+                  &rsWorkListCopy(&i).CCS_STF_WORK_VW.CCS_CHANGE_TYPE.Value = "Job";
+                  /*First occupy has been added any following will not be the first*/
+                  &bFirstOccupy = False;
+               Else
+                  /*Insert a new row onto the end of the rowset*/
+                  
+                  &rsWorkListCopy.InsertRow(&nLastRow);
+                  &nLastRow = &nLastRow + 1;
+                  
+                  &arrPosOccupies [&nOccupiesIndex].CopyFieldsTo(&rsWorkListCopy(&nLastRow).CCS_STF_WORK_VW);
+                  &rsWorkListCopy(&nLastRow).CCS_STF_WORK_VW.CCS_CHANGE_TYPE.Value = "Job";
+               End-If;
+            End-If;
+         End-For;
+         &rBaseData = CreateRecord(Record.CCS_STF_WORK_VW);
+         
       End-If;
       
+   End-For;
+   
+   
+   /*Reset the &rsWorkListRows and push in the new rowset we just created from it*/
+   &rsWorkListRows.Flush();
+   &rsWorkListCopy.CopyTo(&rsWorkListRows);
+   
+   /*Resort the rowset for display*/
+   &rsWorkListRows.Sort(CCS_STF_WORK_VW.EMPLID, "D", CCS_STF_WORK_VW.EFFDT, "D", CCS_STF_WORK_VW.CCS_TRANSACT_NBR, "D");
+   
+   
+   For &nDataIndex = 1 To &rsWorkListRows.RowCount
+      
+      &bDisplayRow = True;
+      
+      &rsWorkListRows(&nDataIndex).CCS_STF_WORK_VW.CopyFieldsTo(&rBaseData);
+      /*Fill in the New rows of the approval request*/
+      &rCurrent_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+      &rNew_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+      
+      /*Don't show completed or no work required rows*/
+      If &rBaseData.CCS_STA_APPROVAL.Value = "C" Or
+            &rBaseData.CCS_STA_APPROVAL.Value = "N" Then
+         &bDisplayRow = False;
+      End-If;
+      Evaluate &rBaseData.CCS_REQUEST_TYPE.Value
+      When "C" /*Position Change*/
+         /*See if the previous row is related to this one */
+         <*
+         If &nDataIndex > 1 And
+               &rsWorkListRows(&nDataIndex - 1).CCS_STF_WORK_VW.CCS_STF_POS_ID.Value = &rBaseData.CCS_STF_POS_ID.Value Then
+            /*The last rows info becomes the info put into the Current Columns*/
+            &rsWorkListRows(&nDataIndex - 1).CCS_STF_WORK_VW.CopyFieldsTo(&rCurrent_WORK_VW);
+            
+            /*The worklist items goes into the New Columns, because it represents the new FTE of the Position*/
+            &rBaseData.CopyFieldsTo(&rNew_WORK_VW);
+            
+            /*The previous rows data also becomes the base info for the worklist item*/
+            /*
+			&rCurrent_WORK_VW.CopyFieldsTo(&rBaseData);
+*/
+         Else
+*>
+         
+         /*Check if this position change is a Job_data or Position_data related change*/
+         If &rBaseData.CCS_CHANGE_TYPE.Value = "Position" Then
+            /*It's a position_Data related pos change*/
+            /*Now we'll check if it's on the do not display list*/
+            If &aHiddenPosChanges.Find(&rBaseData.POSITION_NBR.Value) > 0 Then
+               &bDisplayRow = False;
+            End-If;
+         End-If;
+         /*Previous Row is not related so need to find info from one of the data arrays*/
+         &rsWorkListRows(&nDataIndex).CCS_STF_WORK_VW.CopyFieldsTo(&rCurrent_WORK_VW);
+         
+         %This.GetPreviousPosData(&rCurrent_WORK_VW);
+         /*The worklist items goes into the New Columns, because it represents the new FTE of the Position*/
+         &rBaseData.CopyFieldsTo(&rNew_WORK_VW);
+         
+         /*The found Pos data becomes the base info for the worklist item*/
+         /*
+			&rCurrent_WORK_VW.CopyFieldsTo(&rBaseData);
+			*/
+         <*
+         End-If;
+*>
+      When "I" /*Remove Position*/
+         /*Wipe out the New record*/
+         &rNew_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+         /*Populate the current record*/
+         &rBaseData.CopyFieldsTo(&rCurrent_WORK_VW);
+      When "S" /*Surplus Employee from Position*/
+         /*Wipe out the New record*/
+         &rNew_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+         /*Populate the current record*/
+         &rBaseData.CopyFieldsTo(&rCurrent_WORK_VW);
+         
+      When "L" /*Priority Placement*/
+         /*Wipe out the Current record*/
+         &rCurrent_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+         /*Populate the new record*/
+         &rBaseData.CopyFieldsTo(&rNew_WORK_VW);
+         
+      When "P" /*Employee Placement*/
+         /*Wipe out the Current record*/
+         &rCurrent_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+         /*Populate the new record*/
+         &rBaseData.CopyFieldsTo(&rNew_WORK_VW);
+         
+      When "R" /*Remove Employee from Position*/
+         
+         /*See if this removal is tied to transfer*/
+         If &arrRelatedTransfers.Find(&rBaseData.CCS_TRANSACT_NBR.Value) > 0 Then
+            /*It is so don't display it*/
+            &bDisplayRow = False;
+         Else
+            /*Wipe out the New record*/
+            &rNew_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+            /*Populate the current record*/
+            &rBaseData.CopyFieldsTo(&rCurrent_WORK_VW);
+         End-If;
+         
+      When "T" /*Transfer an Employee*/
+         /*Need to find the related removal */
+         &nRelatedRemovalIndex = &arrRelatedRemovals.Find(&rBaseData.CCS_TRANSACT_NBR.Value);
+         /*The new info is this current row*/
+         &rBaseData.CopyFieldsTo(&rNew_WORK_VW);
+         
+         /*Wipe out the current info this should be filled by a previous removal row*/
+         
+         
+         If &nRelatedRemovalIndex > 0 Then
+            &rCurrent_WORK_VW = CreateRecord(Record.CCS_STF_WORK_VW);
+            
+            /*The old or current data is the related removal data*/
+            &arrRelatedRemovals [&nRelatedRemovalIndex][2].CopyFieldsTo(&rCurrent_WORK_VW);
+            &rCurrent_WORK_VW.CopyFieldsTo(&rBaseData);
+            
+            
+            &rBaseData.EFFDT.Value = &rNew_WORK_VW.EFFDT.Value;
+            &rBaseData.CCS_CHG_CREATE_DTM.Value = &rNew_WORK_VW.CCS_CHG_CREATE_DTM.Value;
+            
+            &rBaseData.CCS_REQUEST_TYPE.Value = &rNew_WORK_VW.CCS_REQUEST_TYPE.Value;
+			&rBaseData.CCS_PRNT_COUNT.Value = &rNew_WORK_VW.CCS_PRNT_COUNT.Value;
+         End-If;
+         &rCurrent_WORK_VW.CCS_REQUEST_TYPE.Value = "T";
+         
+      End-Evaluate;
+      
+      
+      If &bDisplayRow = True Then
+         /*Fill in the Position/Job Info of the left hand columns*/
+         &rTempCCS_DERIVED_WRK.LOCATION.Value = &rBaseData.LOCATION.Value;
+         &rTempCCS_DERIVED_WRK.POSITION_NBR.Value = &rBaseData.POSITION_NBR.Value;
+         &rTempCCS_DERIVED_WRK.EMPLID.Value = &rBaseData.EMPLID.Value;
+         &rTempCCS_DERIVED_WRK.CCS_STF_POS_ID.Value = &rBaseData.CCS_STF_POS_ID.Value;
+         &rTempCCS_DERIVED_WRK.CCS_STF_ACTION.Value = &rBaseData.CCS_STF_ACTION.Value;
+         &rTempCCS_DERIVED_WRK.CCS_REQUEST_TYPE.Value = &rBaseData.CCS_REQUEST_TYPE.Value;
+         
+         &rTempCCS_DERIVED_WRK.EMPL_RCD.Value = &rBaseData.EMPL_RCD.Value;
+         &rTempCCS_DERIVED_WRK.CCS_DISP_EMPL_RCD.Value = &rBaseData.EMPL_RCD.Value;
+         &rTempCCS_DERIVED_WRK.EMPL_CLASS.Value = %This.GetEmplClass(&rBaseData.EMPLID.Value);
+         
+         
+         &rTempCCS_DERIVED_WRK.EFFDT.Value = &rBaseData.EFFDT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_STF_ALLOC_CAT.Value = &rBaseData.CCS_STF_ALLOC_CAT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_SCHOOL_YR_NUM.Value = &rBaseData.CCS_SCHOOL_YR_NUM.Value;
+         &rTempCCS_DERIVED_WRK.FTE.Value = &rBaseData.FTE.Value;
+         &rTempCCS_DERIVED_WRK.CCS_STF_SURPLUS_PP.Value = &rBaseData.CCS_STF_SURPLUS_PP.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CHANGE_TYPE.Value = &rBaseData.CCS_CHANGE_TYPE.Value;
+         &rTempCCS_DERIVED_WRK.CCS_TRANSACT_NBR.Value = &rBaseData.CCS_TRANSACT_NBR.Value;
+         &rTempCCS_DERIVED_WRK.CCS_PRNT_COUNT.Value = &rBaseData.CCS_PRNT_COUNT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_APPROVAL_STAT.Value = &rBaseData.CCS_APPROVAL_STAT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_STA_APPROVAL.Value = &rBaseData.CCS_STA_APPROVAL.Value;
+         
+         
+         &rTempCCS_DERIVED_WRK.CCS_NEW_LOCATION.Value = &rNew_WORK_VW.LOCATION.Value;
+         &rTempCCS_DERIVED_WRK.CCS_NEW_FTE.Value = &rNew_WORK_VW.FTE.Value;
+         &rTempCCS_DERIVED_WRK.CCS_NEW_FTE.Style = "CCS_STF_APPRVL_NEW";
+         &rTempCCS_DERIVED_WRK.CCS_NEW_POS_NBR.Value = &rNew_WORK_VW.POSITION_NBR.Value;
+         
+         &rTempCCS_DERIVED_WRK.CCS_CUR_LOCATION.Value = &rCurrent_WORK_VW.LOCATION.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CUR_FTE.Value = &rCurrent_WORK_VW.FTE.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CUR_FTE.Style = "CCS_STF_APPRVL_OLD";
+         &rTempCCS_DERIVED_WRK.CCS_CUR_POS_NBR.Value = &rCurrent_WORK_VW.POSITION_NBR.Value;
+         /*
+         &rTempCCS_DERIVED_WRK.CCS_COMBINED_FTE.Value = &rBaseData.CCS_COMBINED_FTE.Value;
+         */
+         
+         &rTempCCS_DERIVED_WRK.CCS_COMBINED_FTE.Value = %This.getEmplCombinedFTE(&rBaseData);
+         
+         &rTempCCS_DERIVED_WRK.DESCR.Value = &rBaseData.DESCR.Value;
+         &rTempCCS_DERIVED_WRK.BGN_DT.Value = &rBaseData.BGN_DT.Value;
+         &rTempCCS_DERIVED_WRK.END_DT.Value = &rBaseData.END_DT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CHG_CREATE_DTM.Value = &rBaseData.CCS_CHG_CREATE_DTM.Value;
+         
+         
+         /*Add this record to the temp Approvals rowset*/
+         &rTempCCS_DERIVED_WRK.CopyFieldsTo(&rsDisplayWork(&nDisplayRow).CCS_DERIVED_WRK);
+         
+         &rsDisplayWork.InsertRow(&nDisplayRow);
+         &nDisplayRow = &nDisplayRow + 1;
+         
+         &rBaseData.CopyFieldsTo(&rCurrent_WORK_VW);
+         
+      End-If;
+      
+   End-For;
+   
+   &rsDisplayWork.DeleteRow(&nDisplayRow);
+   
+   Return &rsDisplayWork;
+   
+   <*        
       
       If None(&rNew_WORK_VW.EMPLID.Value) Then
          &rNew_WORK_VW.EMPLID.Value = 0;
@@ -243,8 +922,12 @@ method BuildWorkList
       
    End-For;
    &rsDisplayWork.DeleteRow(&nDisplayRow);
-   Return &rsDisplayWork
+*>
+   
+   
+   
 end-method;
+
 
 method SetLocation
    /+ &sLOCATION as String +/
@@ -582,6 +1265,960 @@ method GetPreviousPosInfo
    End-If;
    
    Return &recPrevRecord;
+   
+end-method;
+
+
+method WalkArray
+   /+ &arrDataArray as Array2 of Any, +/
+   /+ &nStartingIndex as Number, +/
+   /+ &nID as String, +/
+   /+ &dtCutOffDate as Date +/
+   /+ Returns Number +/
+   
+   
+   
+   /*All the data arrays are sorted by Effective Date from Highest to Lowest*/
+   /*So the first entry we find with an EFFDT <= the EFFDT of the passed in Data, it can be 
+   considered to be the MAX EFFDT row relating to the passed in Data*/
+   
+   Local number &nPosIndex;
+   
+   Local boolean &bKeepWalking;
+   
+   &bKeepWalking = True;
+   &nPosIndex = &nStartingIndex;
+   
+   While &bKeepWalking = True
+      /*See if we've walked off the end of the array*/
+      If &nPosIndex > &arrDataArray.Len Then
+         &bKeepWalking = False;
+         &nPosIndex = 0;
+         Break;
+      End-If;
+      
+      /*See if we've walked past all of the related Position Data*/
+      If &arrDataArray [&nPosIndex][1] <> &nID Then
+         &bKeepWalking = False;
+         &nPosIndex = 0;
+         Break;
+      End-If;
+      
+      /*See if there is Position data that affects this Job data*/
+      If &arrDataArray [&nPosIndex][3].EFFDT.value <= &dtCutOffDate Then
+         /*We've found the index we're looking for so return it*/
+         &bKeepWalking = False;
+      End-If;
+      
+      /*Nothing found, walk to the next element of the array*/
+      If &bKeepWalking = True Then
+         &nPosIndex = &nPosIndex + 1;
+      End-If;
+      
+   End-While;
+   
+   Return &nPosIndex;
+   
+end-method;
+
+
+method WalkArrayPosition
+   /+ &arrDataArray as Array2 of Any, +/
+   /+ &nStartingIndex as Number, +/
+   /+ &nID as String, +/
+   /+ &dtCutOffDate as Date, +/
+   /+ &nTransactNbr as Number +/
+   /+ Returns Number +/
+   
+   /*All the data arrays are sorted by Effective Date from Highest to Lowest*/
+   /*So the first entry we find with an EFFDT <= the EFFDT of the passed in Data, it can be 
+   considered to be the MAX EFFDT row relating to the passed in Data*/
+   
+   /*Very similar to WalkArray but finds the entry with an EFFDT Less than the 
+   passed in cut-off date*/
+   Local number &nPosIndex;
+   Local number &nPosTransactNbrIndex;
+   Local boolean &bKeepWalking;
+   
+   Local number &nMaxTransactNbr;
+   
+   &bKeepWalking = True;
+   &nPosIndex = &nStartingIndex;
+   
+   While &bKeepWalking = True
+      /*See if we've walked off the end of the array*/
+      If &nPosIndex > &arrDataArray.Len Then
+         &bKeepWalking = False;
+         &nPosIndex = 0;
+         Break;
+      End-If;
+      
+      /*See if we've walked past all of the related Position Data*/
+      If &arrDataArray [&nPosIndex][1] <> &nID Then
+         &bKeepWalking = False;
+         &nPosIndex = 0;
+         Break;
+      End-If;
+      
+      /*See if there is Position data that has the same EFFDT of the passed in data*/
+      If &arrDataArray [&nPosIndex][3].EFFDT.value = &dtCutOffDate Then
+         /*Now we'll base the selection on the maximum transaction number of the row*/
+         /*Make sure the row we're looking for doesn't have the same Transaction Number as worklist item
+			the search is being done for. If it does it means that the worklist item and the data row are the same row. */
+         
+         If &nTransactNbr <> &arrDataArray [&nPosIndex][3].CCS_TRANSACT_NBR.value Then
+            
+            /*Max Transaction number hasn't been set yet so set it to it's intial value*/
+            If None(&nMaxTransactNbr) Then
+               
+               /*Set the max transaction number*/
+               &nMaxTransactNbr = &arrDataArray [&nPosIndex][3].CCS_TRANSACT_NBR.value;
+               &nPosTransactNbrIndex = &nPosIndex;
+            Else
+               
+               /*See if this new Transaction Number is greater than the current max*/
+               If &arrDataArray [&nPosIndex][3].CCS_TRANSACT_NBR.value > &nMaxTransactNbr Then
+                  &nMaxTransactNbr = &arrDataArray [&nPosIndex][3].CCS_TRANSACT_NBR.value;
+                  &nPosTransactNbrIndex = &nPosIndex;
+               End-If;
+            End-If;
+         End-If;
+      End-If;
+      
+      /*See if there is Position data that affects this Job data*/
+      If &arrDataArray [&nPosIndex][3].EFFDT.value < &dtCutOffDate Then
+         /*We've found the index we're looking for so return it*/
+         &bKeepWalking = False;
+      End-If;
+      
+      /*Nothing found, walk to the next element of the array*/
+      If &bKeepWalking = True Then
+         &nPosIndex = &nPosIndex + 1;
+      End-If;
+      
+   End-While;
+   
+   /*See if the comparisons got the Transaction number level, 
+		and if a row with the same EFFDT but differnt transaction number exists*/
+   If &nMaxTransactNbr > 0 And
+         &nPosTransactNbrIndex > 0 Then
+      &nPosIndex = &nPosTransactNbrIndex;
+   End-If;
+   
+   Return &nPosIndex;
+   
+end-method;
+
+method GetPosData
+   /+ &recData as Record +/
+   
+   
+   
+   /*Goes through all of Position Data arrays that were previously created
+   And pulls back Pos data related to the record passed in*/
+   
+   Local number &nPosStartingIndex;
+   Local number &nPosIndex;
+   
+   Local number &nDataPosI;
+   
+   Local string &sDataRecordName;
+   
+   Local date &dtStaffingDate;
+   Local date &dtHRDate;
+   
+   Local boolean &bKeepWalking;
+   
+   Local SQL &sqlDataQuery;
+   
+   
+   &nPosStartingIndex = &aStaffingPosData.Find(&recData.POSITION_NBR.Value);
+   If &nPosStartingIndex > 0 Then
+      
+      /*Check if the passed in record is a worklist item relating to a change to Position*/
+      
+      
+      
+      &nPosIndex = %This.WalkArray(&aStaffingPosData, &nPosStartingIndex, &recData.POSITION_NBR.Value, &recData.EFFDT.Value);
+      
+      If &nPosIndex > 0 Then
+         &dtStaffingDate = &aStaffingPosData [&nPosIndex][3].EFFDT.Value;
+         
+         &recData.FTE.Value = &aStaffingPosData [&nPosIndex][3].FTE.Value;
+         &recData.JOBCODE.Value = &aStaffingPosData [&nPosIndex][3].JOBCODE.Value;
+         
+      End-If;
+      
+   End-If;
+   
+   /*Figure out if Position data for this job change can be found in the HR past or future Position Data*/
+   &nPosStartingIndex = &aHrPosDataFut.Find(&recData.POSITION_NBR.Value);
+   If &nPosStartingIndex > 0 Then
+      
+      &nPosIndex = %This.WalkArray(&aHrPosDataFut, &nPosStartingIndex, &recData.POSITION_NBR.Value, &recData.EFFDT.Value);
+      
+      If &nPosIndex > 0 And
+            &aHrPosDataPast [&nPosIndex][2] > &dtStaffingDate Then
+         /*HR Pos data was found that is more recent than the staffing pos data so use it*/
+         
+         &recData.FTE.Value = &aHrPosDataFut [&nPosIndex][3].FTE.Value;
+         &recData.JOBCODE.Value = &aHrPosDataFut [&nPosIndex][3].JOBCODE.Value;
+         
+      End-If;
+      
+      /*No future Position data relating to this Job So we'll use past data*/
+   End-If;
+   If &nPosStartingIndex = 0 Or
+         &nPosIndex = 0 Then
+      /*No future Position data relating to this Job So we'll use past data*/
+      &nPosIndex = &aHrPosDataPast.Find(&recData.POSITION_NBR.Value);
+      If &nPosIndex > 0 Then
+         /*Check if the Position data from HR is more recent to the Job Row*/
+         If &aHrPosDataPast [&nPosIndex][2] > &dtStaffingDate Then
+            /*If it is use it over the staffing Pos Data*/
+            &recData.FTE.Value = &aHrPosDataPast [&nPosIndex][3].FTE.Value;
+            &recData.JOBCODE.Value = &aHrPosDataPast [&nPosIndex][3].JOBCODE.Value;
+            
+         End-If;
+      End-If;
+   End-If;
+   
+   
+end-method;
+
+
+method GetPreviousPosData
+   /+ &recData as Record +/
+   
+   
+   
+   /*Goes through all of Position Data arrays that were previously created
+   And pulls back Pos data related to the record passed in*/
+   
+   Local number &nPosStartingIndex;
+   Local number &nPosIndex;
+   
+   Local number &nDataPosI;
+   
+   Local string &sDataRecordName;
+   
+   Local date &dtStaffingDate;
+   Local date &dtHRDate;
+   
+   Local boolean &bKeepWalking;
+   
+   Local SQL &sqlDataQuery;
+   
+   
+   &nPosStartingIndex = &aStaffingPosData.Find(&recData.POSITION_NBR.Value);
+   If &nPosStartingIndex > 0 Then
+      
+      /*Check if the passed in record is a worklist item relating to a change to Position*/
+      
+      /*We need to be careful to not return the staffing position data that created this worklist item, and is therefore identical to the information in the worklist item. 
+		Instead we want to return the previous row of position data before this worklist item.*/
+      &nPosIndex = %This.WalkArrayPosition(&aStaffingPosData, &nPosStartingIndex, &recData.POSITION_NBR.Value, &recData.EFFDT.Value, &recData.CCS_TRANSACT_NBR.Value);
+      
+      If &nPosIndex > 0 Then
+         &dtStaffingDate = &aStaffingPosData [&nPosIndex][3].EFFDT.Value;
+         
+         &recData.FTE.Value = &aStaffingPosData [&nPosIndex][3].FTE.Value;
+         &recData.JOBCODE.Value = &aStaffingPosData [&nPosIndex][3].JOBCODE.Value;
+         
+      End-If;
+      
+   End-If;
+   
+   /*Figure out if Position data for this job change can be found in the HR past or future Position Data*/
+   
+   
+   
+   
+   &nPosStartingIndex = &aHrPosDataFut.Find(&recData.POSITION_NBR.Value);
+   If &nPosStartingIndex > 0 Then
+      
+      &nPosIndex = %This.WalkArrayPosition(&aHrPosDataFut, &nPosStartingIndex, &recData.POSITION_NBR.Value, &recData.EFFDT.Value, &recData.CCS_TRANSACT_NBR.Value);
+      
+      If &nPosIndex > 0 And
+            &aHrPosDataPast [&nPosIndex][2] > &dtStaffingDate Then
+         /*HR Pos data was found that is more recent than the staffing pos data so use it*/
+         
+         &recData.FTE.Value = &aHrPosDataFut [&nPosIndex][3].FTE.Value;
+         &recData.JOBCODE.Value = &aHrPosDataFut [&nPosIndex][3].JOBCODE.Value;
+         
+      End-If;
+   End-If;
+   If &nPosStartingIndex = 0 Or
+         &nPosIndex = 0 Then
+      
+      /*No future Position data relating to this Job So we'll use past data*/
+      &nPosIndex = &aHrPosDataPast.Find(&recData.POSITION_NBR.Value);
+      If &nPosIndex > 0 Then
+         /*Check if the Position data from HR is more recent to the Job Row*/
+         If &aHrPosDataPast [&nPosIndex][2] > &dtStaffingDate Then
+            /*If it is use it over the staffing Pos Data*/
+            &recData.FTE.Value = &aHrPosDataPast [&nPosIndex][3].FTE.Value;
+            &recData.JOBCODE.Value = &aHrPosDataPast [&nPosIndex][3].JOBCODE.Value;
+            
+         End-If;
+      End-If;
+   End-If;
+   
+end-method;
+
+
+method GetJobData
+   /+ &arrRecData as Array of Record +/
+   
+   
+   /*Goes through all of Position Data arrays that were previously created
+   And pulls back JOB data related to the record passed in*/
+   /*Returns all of the rows of JobData that are found for this Position*/
+   
+   Local Record &recData;
+   Local Record &recTempData;
+   
+   Local number &nJobStartingIndex;
+   Local number &nJobIndex;
+   Local number &nJobLookupIndex;
+   Local number &nRelatedJobIndex;
+   Local number &nConsolidatedIndex;
+   
+   Local string &sDataRecordName;
+   Local string &sPosNumber;
+   
+   Local date &dtPosEffdt;
+   Local date &dtStaffingDate;
+   Local date &dtHRDate;
+   
+   Local boolean &bKeepWalking;
+   
+   Local SQL &sqlDataQuery;
+   
+   Local array of array of any &arrConsolidateJobData;
+   Local array of any &arrTempDataInner;
+   
+   &recData = CreateRecord(Record.CCS_STF_WORK_VW);
+   &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+   
+   
+   &arrConsolidateJobData = CreateArrayRept(CreateArrayAny(), 0);
+   If &arrRecData.Len > 0 Then
+      
+      &sPosNumber = &arrRecData [1].POSITION_NBR.Value;
+      &dtPosEffdt = &arrRecData [1].EFFDT.Value;
+      
+      
+      &recData = &arrRecData.Pop();
+      
+      /*Find any Job info about this position from staffing first*/
+      &nJobLookupIndex = &aStaffingJobDataPosIndex.Find(&sPosNumber);
+      
+      If &nJobLookupIndex > 0 Then
+         
+         /*There are Job rows for this Position*/
+         /*Start at index 2 because the first index is reserved for the actual position number*/
+         For &nRelatedJobIndex = 2 To &aStaffingJobDataPosIndex [&nJobLookupIndex].Len
+            /*Each job associated with this position will become a work list item*/
+            &nJobIndex = &aStaffingJobDataPosIndex [&nJobLookupIndex][&nRelatedJobIndex];
+            &recData.CopyFieldsTo(&recTempData);
+            
+            If &aStaffingJobData [&nJobIndex][3].EFFDT.Value < &recTempData.EFFDT.Value Then
+               /*Make sure that person hasn't been surplussed or removed*/
+               
+               If &aStaffingJobData [&nJobIndex][3].CCS_STF_SURPLUS_PP.Value <> "P" And
+                     &aStaffingJobData [&nJobIndex][3].EFF_STATUS.Value <> "I" Then
+                  
+                  
+                  &recTempData.EMPLID.Value = &aStaffingJobData [&nJobIndex][3].EMPLID.Value;
+                  &recTempData.EMPL_RCD.Value = &aStaffingJobData [&nJobIndex][3].EMPL_RCD.Value;
+                  &recTempData.EMPL_CLASS.Value = &aStaffingJobData [&nJobIndex][3].EMPL_CLASS.Value;
+                  &recTempData.CCS_STA_APPROVAL.Value = "";
+                  &recTempData.CCS_CHANGE_TYPE.Value = "Job";
+                  &dtStaffingDate = &aStaffingJobData [&nJobIndex][3].EFFDT.Value;
+                  
+                  /*Create an inner array that has the emplid in this job, the effdt for this job row, and the filled worklist record with job data*/
+                  &arrTempDataInner = CreateArrayAny(&recTempData.EMPLID.Value, &dtStaffingDate, &recTempData);
+                  &arrConsolidateJobData.Push(&arrTempDataInner);
+               End-If;
+            End-If;
+            &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+         End-For;
+      End-If;
+      
+      
+      /*Now we'll go to the HR Job data and see if their is any related data*/
+      /*
+      If &recData.EFFDT.Value <= %Date Then
+	  */
+      /*Check the past data*/
+      /*Find any Job info about this position from staffing first*/
+      &nJobLookupIndex = &aHrJobDataPastPosIndex.Find(&sPosNumber);
+      
+      If &nJobLookupIndex > 0 Then
+         
+         /*There are Job rows for this Position*/
+         /*Start at index 2 because the first index is reserved for the actual position number*/
+         For &nRelatedJobIndex = 2 To &aHrJobDataPastPosIndex [&nJobLookupIndex].Len
+            /*Each job associated with this position will become a work list item*/
+            &nJobIndex = &aHrJobDataPastPosIndex [&nJobLookupIndex][&nRelatedJobIndex];
+            &recData.CopyFieldsTo(&recTempData);
+            
+            /*Check the EFFDT of this Job data and see if it occurs before the Position EFFDT*/
+            If &aHrJobDataPast [&nJobIndex][3].EFFDT.Value < &recTempData.EFFDT.Value Then
+               &recTempData.EMPLID.Value = &aHrJobDataPast [&nJobIndex][3].EMPLID.Value;
+               &recTempData.EMPL_RCD.Value = &aHrJobDataPast [&nJobIndex][3].EMPL_RCD.Value;
+               &recTempData.EMPL_CLASS.Value = &aHrJobDataPast [&nJobIndex][3].EMPL_CLASS.Value;
+               &recTempData.CCS_STA_APPROVAL.Value = "";
+               &recTempData.CCS_CHANGE_TYPE.Value = "Job";
+               &dtHRDate = &aHrJobDataPast [&nJobIndex][3].EFFDT.Value;
+               
+               &nConsolidatedIndex = &arrConsolidateJobData.Find(&recTempData.EMPLID.Value);
+               /*See if Job data for this employee has already been associated with this position*/
+               If &nConsolidatedIndex > 0 Then
+                  
+                  /*Check if this job data is closer to the Position EFFDT than any previous job data that was found*/
+                  If &dtHRDate > &arrConsolidateJobData [&nConsolidatedIndex][2] Then
+                     /*If this data is closer overwrite the existing job data with it*/
+                     &arrConsolidateJobData [&nConsolidatedIndex][2] = &dtHRDate;
+                     &arrConsolidateJobData [&nConsolidatedIndex][3] = &recTempData;
+                  End-If;
+               Else
+                  /*Create an inner array that has the emplid in this job, the effdt for this job row, and the filled worklist record with job data*/
+                  &arrTempDataInner = CreateArrayAny(&recTempData.EMPLID.Value, &dtHRDate, &recTempData);
+                  &arrConsolidateJobData.Push(&arrTempDataInner);
+               End-If;
+            End-If;
+            
+            &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+         End-For;
+      End-If;
+      /*
+      Else
+       */
+      /*Check the Future data*/
+      &nJobLookupIndex = &aHrJobDataFutPosIndex.Find(&sPosNumber);
+      
+      If &nJobLookupIndex > 0 Then
+         
+         /*There are Job rows for this Position*/
+         /*Start at index 2 because the first index is reserved for the actual position number*/
+         For &nRelatedJobIndex = 2 To &aHrJobDataFutPosIndex [&nJobLookupIndex].Len
+            /*Each job associated with this position will become a work list item*/
+            &nJobIndex = &aHrJobDataFutPosIndex [&nJobLookupIndex][&nRelatedJobIndex];
+            &recData.CopyFieldsTo(&recTempData);
+            
+            /*Check the EFFDT of this Job data and see if it occurs before the Position EFFDT*/
+            If &aHrJobDataFut [&nJobIndex][3].EFFDT.Value < &recTempData.EFFDT.Value Then
+               &recTempData.EMPLID.Value = &aHrJobDataFut [&nJobIndex][3].EMPLID.Value;
+               &recTempData.EMPL_RCD.Value = &aHrJobDataFut [&nJobIndex][3].EMPL_RCD.Value;
+               &recTempData.EMPL_CLASS.Value = &aHrJobDataFut [&nJobIndex][3].EMPL_CLASS.Value;
+               &recTempData.CCS_STA_APPROVAL.Value = "";
+               &recTempData.CCS_CHANGE_TYPE.Value = "Job";
+               &dtHRDate = &aHrJobDataFut [&nJobIndex][3].EFFDT.Value;
+               
+               
+               &nConsolidatedIndex = &arrConsolidateJobData.Find(&recTempData.EMPLID.Value);
+               /*See if Job data for this employee has already been associated with this position*/
+               If &nConsolidatedIndex > 0 Then
+                  
+                  /*Check if the job data is closer to the Position EFFDT than any previous job data that was found*/
+                  If &dtHRDate > &arrConsolidateJobData [&nConsolidatedIndex][2] Then
+                     /*If this data is closer overwrite the existing job data with it*/
+                     &arrConsolidateJobData [&nConsolidatedIndex][2] = &dtHRDate;
+                     &arrConsolidateJobData [&nConsolidatedIndex][3] = &recTempData;
+                  End-If;
+               Else
+                  /*Create an inner array that has the emplid in this job, the effdt for this job row, and the filled worklist record with job data*/
+                  &arrTempDataInner = CreateArrayAny(&recTempData.EMPLID.Value, &dtHRDate, &recTempData);
+                  &arrConsolidateJobData.Push(&arrTempDataInner);
+               End-If;
+            End-If;
+            
+            &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+         End-For;
+      End-If;
+      /*
+      End-If;
+      */
+      /*Go through the Consolidate array and strip out the extra info and just return the relevant stored job records*/
+      &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+      For &nConsolidatedIndex = 1 To &arrConsolidateJobData.Len
+         
+         &arrConsolidateJobData [&nConsolidatedIndex][3].CopyFieldsto(&recTempData);
+         &arrRecData.Unshift(&recTempData);
+         
+         &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+      End-For;
+   End-If;
+end-method;
+
+
+method SetUpEmplClass
+   /+ &sEmplId as String, +/
+   /+ &sEmplClass as String +/
+   
+   /*This functions figures out and  stores the EMPL_Class for an Employee*/
+   /*Use the &aEmplClass class array which is two dimension array ([EMPLID],[EMPL_CLASS])*/
+   
+   Local number &nEmplIndex;
+   
+   Local string &sTempEmplClass;
+   
+   Local array of any &aEmplClassSub;
+   
+   /*See if there is already a stored EmplClass for this employee*/
+   &nEmplIndex = &aEmplClass.Find(&sEmplId);
+   
+   If &nEmplIndex > 0 Then
+      /*If there is existing entry see how it compares to what the new EMPL_CLASS IS */
+      &sTempEmplClass = &aEmplClass [&nEmplIndex][2];
+      
+      Evaluate &sEmplClass
+      When "V"
+         Break;
+      When "M"
+         If &sTempEmplClass = "V" Then
+            &sTempEmplClass = &sEmplClass;
+            Break;
+         End-If;
+      When "N"
+         If &sTempEmplClass = "V" Or
+               &sTempEmplClass = "M" Then
+            &sTempEmplClass = &sEmplClass;
+            Break;
+         End-If;
+      When "W"
+         If &sTempEmplClass = "V" Or
+               &sTempEmplClass = "M" Or
+               &sTempEmplClass = "N" Then
+            &sTempEmplClass = &sEmplClass;
+            Break;
+         End-If;
+      When "X"
+         If &sTempEmplClass = "V" Or
+               &sTempEmplClass = "M" Or
+               &sTempEmplClass = "N" Or
+               &sTempEmplClass = "W" Then
+            &sTempEmplClass = &sEmplClass;
+            Break;
+         End-If;
+      When "K"
+         If &sTempEmplClass = "V" Or
+               &sTempEmplClass = "M" Or
+               &sTempEmplClass = "N" Or
+               &sTempEmplClass = "W" Or
+               &sTempEmplClass = "X" Then
+            &sTempEmplClass = &sEmplClass;
+            Break;
+         End-If;
+      When "L"
+         If &sTempEmplClass = "V" Or
+               &sTempEmplClass = "M" Or
+               &sTempEmplClass = "N" Or
+               &sTempEmplClass = "W" Or
+               &sTempEmplClass = "X" Or
+               &sTempEmplClass = "K" Then
+            &sTempEmplClass = &sEmplClass;
+            Break;
+         End-If;
+      End-Evaluate;
+      
+      &aEmplClass [&nEmplIndex][2] = &sTempEmplClass;
+   Else
+      &aEmplClassSub = CreateArrayAny(&sEmplId, &sEmplClass);
+      &aEmplClass.Push(&aEmplClassSub);
+   End-If;
+   
+end-method;
+
+
+method GetEmplClass
+   /+ &sEmplId as String +/
+   /+ Returns String +/
+   
+   Local number &nEmplIndex;
+   Local string &sTempEmplClass;
+   
+   &nEmplIndex = &aEmplClass.Find(&sEmplId);
+   
+   If &nEmplIndex > 0 Then
+      &sTempEmplClass = &aEmplClass [&nEmplIndex][2];
+   End-If;
+   
+   Return &sTempEmplClass;
+end-method;
+
+
+method PopulateEmplOccupyArray /*Effdt of the position occupy*/
+   /+ &recData as Record +/
+   
+   /*The record should be filled with both Job and Position data*/
+   
+   
+   Local number &nEmpIndex;
+   Local number &nEffdtIndex;
+   Local number &nEmplidEffdtOccupyIndex;
+   Local number &nPrevEffdtIndex;
+   Local number &nPosIndex;
+   Local number &nI;
+   Local number &nJ;
+   Local number &nK;
+   Local number &nTempPosNbr;
+   Local number &nTempFte;
+   Local number &nArrayLength;
+   
+   Local number &nKillSwitch;
+   
+   Local boolean &bAddPosToArray; /*Determines if pos should be added to the occupy list for a specific EFFDT*/
+   Local boolean &bCarryPosForward; /*Determines whether or not an pos should be added to occupy lists for the future*/
+   Local boolean &bEffdtOccupyAlreadyAdded; /*Indicates that the passed in record has been inserted into the over reaching array*/
+   Local boolean &nKeepLooping;
+   
+   Local array of array of any &aPrevEmplOccupies;
+   Local array of array of array of any &aNewEmplOccupies;
+   Local array of array of any &aCurrentEmplOccupies;
+   Local array of array of any &aNewEmplEffdtOccupy;
+   Local array of any &aNewEmplEffdtOccupySub;
+   Local array of array of any &aEffdtOccupiesIndexCopy;
+   Local array of any &aEffdtOccupiesIndexSub;
+   Local array of array of any &aLastEffdtArray;
+   
+   &nKeepLooping = True;
+   &bAddPosToArray = True;
+   &bEffdtOccupyAlreadyAdded = False;
+   
+   
+   &aNewEmplEffdtOccupy = CreateArrayRept(CreateArrayAny(), 0);
+   &aPrevEmplOccupies = CreateArrayRept(CreateArrayAny(), 0);
+   &aCurrentEmplOccupies = CreateArrayRept(CreateArrayAny(), 0);
+   &aNewEmplOccupies = CreateArrayRept(CreateArrayRept(CreateArrayAny(), 0), 0);
+   
+   &aNewEmplEffdtOccupySub = CreateArrayAny();
+   &aEffdtOccupiesIndexCopy = CreateArrayRept(CreateArrayAny(), 0);
+   &aLastEffdtArray = CreateArrayRept(CreateArrayAny(), 0);
+   
+   
+   &nTempPosNbr = &recData.POSITION_NBR.Value;
+   
+   /*Figure out what is happening with this record*/
+   If &recData.CCS_CHANGE_TYPE.Value = "Job" Then
+      
+      Evaluate &recData.CCS_STF_ACTION.Value
+      When "S" /*Surplussed from position*/
+         &nTempFte = 0;
+      When "R" /*Removed from position*/
+         &nTempFte = 0;
+      When "T" /*Transfered into*/
+         &nTempFte = &recData.FTE.Value;
+      When "P" /*Placement*/
+         &nTempFte = &recData.FTE.Value;
+      When "L" /*Prioirty Placement*/
+         &nTempFte = &recData.FTE.Value;
+      End-Evaluate;
+   End-If;
+   
+   /*If it's a Position Change we'll just take the FTE of the Change*/
+   If &recData.CCS_CHANGE_TYPE.Value = "Position" Then
+      &nTempFte = &recData.FTE.Value;
+   End-If;
+   
+   
+   
+   
+   If &recData.CCS_CHANGE_TYPE.Value = "" Then
+      /*The rec data is coming from staffing so the FTE is based on the EMPL_STATUS*/
+      Evaluate &recData.EMPL_STATUS.Value
+      When "S" /*Suspended*/
+         &nTempFte = &recData.FTE.Value;
+      When "A" /*Active*/
+         &nTempFte = &recData.FTE.Value;
+      When "L" /*Leave of absence*/
+         &nTempFte = &recData.FTE.Value;
+      When "P" /*Leave with pay*/
+         &nTempFte = &recData.FTE.Value;
+      When-Other
+         &nTempFte = 0;
+      End-Evaluate;
+      &nTempFte = &recData.FTE.Value;
+   End-If;
+   
+   /*Find out the index for the EMPLS EFFDT Subarray*/
+   &nEmpIndex = &aEmplIdOccupiesIndex.Find(&recData.EMPLID.Value);
+   
+   If &nEmpIndex > 0 Then
+      
+      /*Take a copy of the EFFDTS Index array*/
+      &aEffdtOccupiesIndexCopy = &aEffdtOccupiesIndex [&nEmpIndex].Clone();
+      
+      /*Re-sort the EFFDT INDEX ARRAY to be ASC by EFFDT*/
+      /*This required for inserting pos change info */
+      &aEffdtOccupiesIndexCopy.Sort("A");
+      
+      &nArrayLength = &aEffdtOccupiesIndexCopy.Len;
+      &nI = 1;
+      
+      /*Go through all of the EFFDTS and see how each one relates to the passed in record*/
+      While &nKeepLooping = True
+         
+         /*         
+         &nKillSwitch = &nKillSwitch + 1;
+         If &nKillSwitch > 1000 Then
+            &nKeepLooping = False;
+         End-If;
+ */
+         Evaluate &recData.EFFDT.Value
+         When < &aEffdtOccupiesIndexCopy [&nI][1]
+            
+            If &bEffdtOccupyAlreadyAdded = False Then
+               If &nI = 1 Then
+                  /*The passed in record is going to be the first entry into the array so there are no previous occupies to worry about*/
+                  &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+                  &aNewEmplEffdtOccupy.Push(&aNewEmplEffdtOccupySub);
+                  
+               Else
+                  /*Get the occupied positions that occured before the EFFDT of this passed in occupy*/
+                  &nPrevEffdtIndex = &nI - 1;
+                  
+                  &aPrevEmplOccupies = &aEmplOccupies [&nEmpIndex][&nPrevEffdtIndex].Clone();
+                  
+                  /*Go through the Employees Occupies for the Effdt Just before the Effdt of the Passed in record*/
+                  For &nK = 1 To &aPrevEmplOccupies.Len
+                     /*Check if one of the previous occupies is the same as the passed in record*/
+                     If &aPrevEmplOccupies [&nK][1] = &nTempPosNbr Then
+                        /*One of them is so we'll over write it's info with this new info*/
+                        &aPrevEmplOccupies [&nK][2] = &nTempFte;
+                        
+                        /*Won't re-add this position because it is already recorded*/
+                        &bAddPosToArray = False;
+                     End-If;
+                  End-For;
+                  
+                  If &bAddPosToArray = True Then
+                     /*Occupy info passed in with the record hasn't been recorded yet so add it to the array of previous occupies*/
+                     &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+                     &aPrevEmplOccupies.Push(&aNewEmplEffdtOccupySub);
+                  End-If;
+                  
+                  /*The occupies for the new EFFDT is created from the previous occupies and the 
+					new occupy information that was passed in*/
+                  &aNewEmplEffdtOccupy = &aPrevEmplOccupies.Clone();
+                  
+               End-If;
+               
+               /*Push our new Empl occupy  sub-array onto the overreaching array*/
+               
+               /*Get the array of Effdts and each sub-array of occupies for each*/
+               &aNewEmplOccupies = &aEmplOccupies [&nEmpIndex];
+               
+               /*Put the new occupies for the new EFFDT on the end*/
+               &aNewEmplOccupies.Push(&aNewEmplEffdtOccupy);
+               
+               /*Store the Effdt Index for the new occupies*/
+               &nEmplidEffdtOccupyIndex = &aEmplOccupies [&nEmpIndex].Len;
+               /*Create the sub-array of Effdt and it's related index*/
+               &aEffdtOccupiesIndexSub = CreateArrayAny(&recData.EFFDT.Value, &nEmplidEffdtOccupyIndex);
+               
+               /*Store this new EFFDT and Index in the EffdtOccupies array*/
+               &aEffdtOccupiesIndex [&nEmpIndex].Unshift(&aEffdtOccupiesIndexSub);
+               
+               /*Record that this new row data has been recorded*/
+               /*It will still be compared to all the other occupy data for this person*/
+               &bEffdtOccupyAlreadyAdded = True;
+               
+            End-If;
+            
+            /*Get the Occupies for the current EFFDT that we are looking at*/
+            
+            &nEffdtIndex = &aEffdtOccupiesIndexCopy [&nI][2];
+            &aCurrentEmplOccupies = &aEmplOccupies [&nEmpIndex][&nEffdtIndex];
+            
+            /*Reset the variable for adding the passed in occupy to the */
+            &bAddPosToArray = True;
+            /*Go through the current occupies and see if this Position is already there*/
+            For &nK = 1 To &aCurrentEmplOccupies.Len
+               If &aCurrentEmplOccupies [&nK][1] = &nTempPosNbr Then
+                  &bAddPosToArray = False;
+               End-If;
+            End-For;
+            
+            If &bAddPosToArray = True Then
+               /*Add this position to the current array*/
+               &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+               &aCurrentEmplOccupies.Push(&aNewEmplEffdtOccupySub);
+            End-If;
+            
+            
+         When = &aEffdtOccupiesIndexCopy [&nI][1]
+            /*The effdt of this occupy has already been recorded for this EMPL */
+            /*Could be because it's another Position that the person was placed in on the same date, etc...*/
+            
+            
+            /*Get the Occupies for the current EFFDT that we are looking at*/
+            
+            &nEffdtIndex = &aEffdtOccupiesIndexCopy [&nI][2];
+            &aCurrentEmplOccupies = &aEmplOccupies [&nEmpIndex][&nEffdtIndex];
+            
+            /*Reset the variable for adding the passed in occupy to the */
+            &bAddPosToArray = True;
+            /*Go through the current occupies and see if this Position is already there*/
+            For &nK = 1 To &aCurrentEmplOccupies.Len
+               If &aCurrentEmplOccupies [&nK][1] = &nTempPosNbr Then
+                  &bAddPosToArray = False;
+                  
+                  /*If the incoming record is from Staffing it will overwrite the existing pos info*/
+                  If &recData.CCS_CHANGE_TYPE.Value = "Job" Or
+                        &recData.CCS_CHANGE_TYPE.Value = "Position" Then
+                     &aCurrentEmplOccupies [&nK][2] = &nTempFte;
+                  End-If;
+               End-If;
+            End-For;
+            
+            If &bAddPosToArray = True Then
+               /*Add this position to the current array*/
+               &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+               &aCurrentEmplOccupies.Push(&aNewEmplEffdtOccupySub);
+            End-If;
+            /*Record that this new row data has been recorded*/
+            &bEffdtOccupyAlreadyAdded = True;
+            
+            
+         When > &aEffdtOccupiesIndexCopy [&nI][1]
+            
+            If &bEffdtOccupyAlreadyAdded = False Then
+               If &nI = &nArrayLength Then
+                  /*We've gone through all the other Occupy EFFDTs and the passed in Records EFFDT is greater than all of them*/
+                  /*The passed in record is going to be the last entry into the array*/
+                  If &nI >= 1 Then
+                     /*Get the occupied positions that occured before the EFFDT of this passed in occupy*/
+                     &nPrevEffdtIndex = &nI;
+                     
+                     
+                     &aPrevEmplOccupies = &aEmplOccupies [&nEmpIndex][&nPrevEffdtIndex].Clone();
+                     
+                     /*Go through the Employees Occupies for the Effdt Just before the Effdt of the Passed in record*/
+                     For &nK = 1 To &aPrevEmplOccupies.Len
+                        /*Check if one of the previous occupies is the same as the passed in record*/
+                        If &aPrevEmplOccupies [&nK][1] = &nTempPosNbr Then
+                           /*One of them is so we'll over write it's info with this new info*/
+                           &aPrevEmplOccupies [&nK][2] = &nTempFte;
+                           
+                           /*Won't re-add this position because it is already recorded*/
+                           &bAddPosToArray = False;
+                        End-If;
+                     End-For;
+                     
+                     If &bAddPosToArray = True Then
+                        /*Occupy info passed in with the record hasn't been recorded yet so add it to the array of previous occupies*/
+                        &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+                        &aPrevEmplOccupies.Push(&aNewEmplEffdtOccupySub);
+                     End-If;
+                     
+                     /*The occupies for the new EFFDT is created from the previous occupies and the 
+						new occupy information that was passed in*/
+                     &aNewEmplEffdtOccupy = &aPrevEmplOccupies.Clone();
+                  Else
+                     /*The passed in record is going to be the first entry into the array so there are no previous occupies to worry about*/
+                     &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+                     &aNewEmplEffdtOccupy.Push(&aNewEmplEffdtOccupySub);
+                  End-If;
+                  
+                  /*Push our new Empl occupy  sub-array onto the overreaching array*/
+                  
+                  /*Get the array of Effdts and each sub-array of occupies for each*/
+                  &aNewEmplOccupies = &aEmplOccupies [&nEmpIndex];
+                  
+                  /*Put the new occupies for the new EFFDT on the end*/
+                  &aNewEmplOccupies.Push(&aNewEmplEffdtOccupy);
+                  
+                  /*Store the Effdt Index for the new occupies*/
+                  &nEmplidEffdtOccupyIndex = &aEmplOccupies [&nEmpIndex].Len;
+                  /*Create the sub-array of Effdt and it's related index*/
+                  &aEffdtOccupiesIndexSub = CreateArrayAny(&recData.EFFDT.Value, &nEmplidEffdtOccupyIndex);
+                  
+                  /*Store this new EFFDT and Index in the EffdtOccupies array*/
+                  &aEffdtOccupiesIndex [&nEmpIndex].Unshift(&aEffdtOccupiesIndexSub);
+                  
+                  /*Record that this new row data has been recorded*/
+                  /*It will still be compared to all the other occupy data for this person*/
+                  &bEffdtOccupyAlreadyAdded = True;
+               End-If;
+            End-If;
+            
+            
+         End-Evaluate;
+         
+         /*
+         &nPrevEffdtIndex = &aEffdtOccupiesIndexCopy [&nI][2];
+         */
+         
+         /*Increment the index for the Effdt array that we are walking through*/
+         &nI = &nI + 1;
+         If &nI > &nArrayLength Then
+            &nKeepLooping = False;
+         End-If;
+      End-While;
+      
+      
+   Else
+      /*Need to store the EMPLID info for the first time*/
+      
+      &aNewEmplEffdtOccupySub = CreateArrayAny(&nTempPosNbr, &nTempFte);
+      &aNewEmplEffdtOccupy.Push(&aNewEmplEffdtOccupySub);
+      &aNewEmplOccupies.Push(&aNewEmplEffdtOccupy);
+      /*Push our new Empl occupies sub-array onto the overreaching array*/
+      &aEmplOccupies.Push(&aNewEmplOccupies);
+      
+      /*Populate the EMPLD Index*/
+      &nEmpIndex = &aEmplOccupies.Len;
+      &aEmplIdOccupiesIndex [&nEmpIndex] = &recData.EMPLID.Value;
+      
+      /*Create the entry for the Empl EFFDT Index*/
+      &aEffdtOccupiesIndexSub = CreateArrayAny(&recData.EFFDT.Value, 1);
+      &aEffdtOccupiesIndexCopy.Push(&aEffdtOccupiesIndexSub);
+      
+      /*Push this onto the EMPLID Effdt Index Array*/
+      &aEffdtOccupiesIndex [&nEmpIndex] = (&aEffdtOccupiesIndexCopy);
+      
+   End-If;
+   
+   
+end-method;
+
+
+method getEmplCombinedFTE
+   /+ &recData as Record +/
+   /+ Returns Number +/
+   
+   Local number &nEmplIndex;
+   Local number &nEffdtIndex;
+   Local number &nEmplEffdtOccupiesIndex;
+   Local number &nI;
+   Local number &nFteSum;
+   Local string &sTempEmplId;
+   
+   Local date &dTempEffdt;
+   
+   Local array of array of any &aEmplOccupiesForEffdt;
+   
+   &sTempEmplId = &recData.EMPLID.Value;
+   &dTempEffdt = &recData.EFFDT.Value;
+   
+   &nEmplIndex = &aEmplIdOccupiesIndex.Find(&sTempEmplId);
+   
+   If &nEmplIndex > 0 Then
+      &nEffdtIndex = &aEffdtOccupiesIndex [&nEmplIndex].Find(&dTempEffdt);
+      If &nEffdtIndex > 0 Then
+         &nEmplEffdtOccupiesIndex = &aEffdtOccupiesIndex [&nEmplIndex][&nEffdtIndex][2];
+         &aEmplOccupiesForEffdt = &aEmplOccupies [&nEmplIndex][&nEmplEffdtOccupiesIndex].Clone();
+         For &nI = 1 To &aEmplOccupiesForEffdt.Len
+            &nFteSum = &nFteSum + &aEmplOccupiesForEffdt [&nI][2];
+         End-For;
+      End-If;
+   End-If;
+   
+   
+   Return &nFteSum;
    
 end-method;
 

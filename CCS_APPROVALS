@@ -4,7 +4,7 @@ import CCS_STF_STA:*;
 
 class CCS_APPROVALS
    method CCS_APPROVALS();
-   method BuildApprovalList() Returns Rowset;
+   method BuildApprovalList(&sSrchHrStaffArea As string, &sSrchLocation As string, &sSrchReqType As string) Returns Rowset;
    method SetLocation(&sLOCATION As string);
    method SetEmplid(&sEMPLID As string);
    method SetStfPosID(&nCCS_STF_POS_ID As number);
@@ -17,6 +17,7 @@ class CCS_APPROVALS
    property string WhereClause;
    property string LOCATION;
    property string EMPLID;
+   
    property number CCS_STF_POS_ID;
    property array of array of any aEMPLID;
    property array of array of any aPOSITION_NBR;
@@ -28,6 +29,10 @@ class CCS_APPROVALS
 end-class;
 
 method CCS_APPROVALS
+   
+   
+   
+   
    &WhereClause = "";
    
    /*&aEMPLID is 2 dimension array the first element of sub-array is the EMPLID 
@@ -48,6 +53,9 @@ method CCS_APPROVALS
 end-method;
 
 method BuildApprovalList
+   /+ &sSrchHrStaffArea as String, +/
+   /+ &sSrchLocation as String, +/
+   /+ &sSrchReqType as String +/
    /+ Returns Rowset +/
    /*Will query CCS_STF_POS and CCS_EE_JOB_STF and build a list of changes/additions that need approval*/
    
@@ -92,13 +100,13 @@ method BuildApprovalList
    Local number &nRelTranIndex;
    Local number &nPrevTranIndex;
    Local number &nTempPosId;
-
    Local number &nTempEmplRcd;
    
    Local string &sTempEmplId;
    
    Local boolean &bExistingJobData;
    Local boolean &bExistingPosData;
+   Local boolean &bIncludeRow;
    
    Local float &nRuntime;
    
@@ -263,6 +271,7 @@ method BuildApprovalList
          If &recCurrentRecord.CCS_STF_ACTION.Value = "R" Then
             If &recPrevTransaction.CCS_STF_ACTION.Value = "T" Or
                   
+                  
                   &recCurrentRecord.CCS_STF_ACTION.Value = "P" Then
                
                &recCurrentRecord.CopyFieldsTo(&recPrev_APRV_VW);
@@ -285,6 +294,7 @@ method BuildApprovalList
             &nPrevTranIndex = - 1;
          End-If;
          
+         
          &recTempNEW_APRV_VW = CreateRecord(Record.CCS_STF_APRV_VW);
          &rNew_APRV_VW.CopyFieldsTo(&recTempNEW_APRV_VW);
          &arrRelatedTransaction.Push(CreateArrayAny(&recCurrentRecord.CCS_TRANSACT_NBR.Value, &nPrevTranIndex, &recTempNEW_APRV_VW));
@@ -299,6 +309,7 @@ method BuildApprovalList
       
       If &recCurrentRecord.CCS_STA_APPROVAL.Value = "P" Then
          
+         
          /*Fill in the New rows of the approval request*/
          
          &rTempCCS_DERIVED_APR.LOCATION.Value = &rActual_APRV_VW.LOCATION.Value;
@@ -306,6 +317,9 @@ method BuildApprovalList
          &rTempCCS_DERIVED_APR.EMPLID.Value = &recCurrentRecord.EMPLID.Value;
          &rTempCCS_DERIVED_APR.CCS_STF_POS_ID.Value = &recCurrentRecord.CCS_STF_POS_ID.Value;
          &rTempCCS_DERIVED_APR.CCS_STF_ACTION.Value = &recCurrentRecord.CCS_STF_ACTION.Value;
+         &rTempCCS_DERIVED_APR.CCS_SCH_HR_AREA.Value = &recCurrentRecord.CCS_SCH_HR_AREA.Value;
+         
+         
          /*Check that the empl_rcd is from a JOB Change, POS changes use a negative empl_rcd*/
          If &recCurrentRecord.EMPL_RCD.Value > - 1 Then
             &rTempCCS_DERIVED_APR.EMPL_RCD.Value = &recCurrentRecord.EMPL_RCD.Value;
@@ -348,7 +362,6 @@ method BuildApprovalList
          End-If;
          
          &nTempPosId = &rNew_APRV_VW.CCS_STF_POS_ID.Value;
-
          &sTempEmplId = &rNew_APRV_VW.EMPLID.Value;
          &nTempEmplRcd = &rNew_APRV_VW.EMPL_RCD.Value;
          
@@ -360,7 +373,6 @@ method BuildApprovalList
             SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &sTempEmplId, &nTempEmplRcd, &dOccupyDate);
             If All(&dOccupyDate) Then
                &rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
-
             End-If;
          End-If;
          
@@ -376,7 +388,6 @@ method BuildApprovalList
             SQLExec("Select CCS_OCPY_BGN_DT FROM PS_CCS_EE_JOB_DTS WHERE CCS_STF_POS_ID = :1 AND EMPLID = :2 AND EMPL_RCD = :3", &nTempPosId, &sTempEmplId, &nTempEmplRcd, &dOccupyDate);
             If All(&dOccupyDate) Then
                &rTempCCS_DERIVED_APR.EFFDT.Value = &dOccupyDate;
-
             End-If;
             
          End-If;
@@ -400,9 +411,6 @@ method BuildApprovalList
          End-If;
          
          
-         /*Add this record to the temp Approvals rowset*/
-         &rTempCCS_DERIVED_APR.CopyFieldsTo(&rsDisplayApprovals(&nDisplayRow).CCS_DERIVED_APR);
-         
          /*Set the approval and rejection flags*/
          If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value = "A" Then
             &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "A";
@@ -414,11 +422,13 @@ method BuildApprovalList
             &rTempCCS_DERIVED_APR.CCS_APPRV_STAT_APR.Value = "R";
          End-If;
          
-         /*If the combined FTE is less than zero set it to zero*/
          
-         
+         /*Add this record to the temp Approvals rowset*/
+         &rTempCCS_DERIVED_APR.CopyFieldsTo(&rsDisplayApprovals(&nDisplayRow).CCS_DERIVED_APR);
          &rsDisplayApprovals.InsertRow(&nDisplayRow);
          &nDisplayRow = &nDisplayRow + 1;
+         
+         
          
          If &rNew_APRV_VW.CCS_APPROVAL_STAT.Value <> "R" Then
             &rNew_APRV_VW.CopyFieldsTo(&recPrev_APRV_VW);
@@ -477,13 +487,75 @@ method BuildApprovalList
 */
    End-For;
    &rsDisplayApprovals.DeleteRow(&nDisplayRow);
+   
+   
    Local time &start;
    &start = %PerfTime;
+   
+   
    /*Delete the extra rows starting with the ones at the end*/
    While &arrRowsToDelete.Len > 0
       &nRowToDelete = &arrRowsToDelete.Pop();
-      &rsDisplayApprovals.DeleteRow(&nRowToDelete);
+      If &rsDisplayApprovals.ActiveRowCount > 0 Then
+         &rsDisplayApprovals.DeleteRow(&nRowToDelete);
+      End-If;
    End-While;
+   
+   
+   /*go through the approvals list again and remove any that don't match the search criteria*/
+   
+   
+   &i = &rsDisplayApprovals.ActiveRowCount;
+   
+   While &i > 0
+      
+      
+      
+      &bIncludeRow = True;
+      
+      &rTempCCS_DERIVED_APR = &rsDisplayApprovals(&i).CCS_DERIVED_APR;
+      
+      If Not ((&sSrchHrStaffArea <> "" And
+            
+            &rTempCCS_DERIVED_APR.CCS_SCH_HR_AREA.Value) Or
+            
+            (&sSrchHrStaffArea = "")) Then
+         
+         &bIncludeRow = False;
+         
+      End-If;
+      
+      If Not ((&sSrchLocation <> "" And
+            
+            &rTempCCS_DERIVED_APR.LOCATION.Value = &sSrchLocation) Or
+            
+            (&sSrchLocation = "")) Then
+         
+         &bIncludeRow = False;
+         
+      End-If;
+      
+      
+      
+      If Not ((&sSrchReqType <> "" And
+            
+            &rTempCCS_DERIVED_APR.CCS_REQUEST_TYPE.Value = &sSrchReqType) Or
+            
+            (&sSrchReqType = "")) Then
+         
+         &bIncludeRow = False;
+         
+      End-If;
+      
+      If &bIncludeRow = False Then
+         
+         &rsDisplayApprovals.DeleteRow(&i);
+      End-If;
+      &i = &i - 1;
+   End-While;
+   
+   
+   
    
    Return &rsDisplayApprovals
 end-method;
@@ -871,4 +943,3 @@ method GetPreviousPosInfo
    Return &recPrevRecord;
 end-method;
 
- 
