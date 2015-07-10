@@ -24,8 +24,10 @@ class CCS_WORKLIST
    method GetEmplClass(&sEmplId As string) Returns string;
    method PopulateEmplOccupyArray(&recData As Record);
    method getEmplCombinedFTE(&recData As Record) Returns number;
+   method Search(&sHrStaffArea As string, &sLoc As string, &sEmplid As string) Returns Rowset;
    
    property Rowset rsWorkListRows;
+   property Rowset rsOriginalDisplayWorkList;
    
    property string WhereClause;
    property string LOCATION;
@@ -89,6 +91,8 @@ method CCS_WORKLIST
    Local array of array of array of any &arrTempJobReturnDataArray;
    
    &rsWorkListRows = CreateRowset(Record.CCS_STF_WORK_VW);
+   &rsOriginalDisplayWorkList = CreateRowset(Record.CCS_DERIVED_WRK);
+   
    &rsWorkListRows.Fill(&WhereClause | " ORDER BY EMPLID, EFFDT DESC");
    
    &WhereClause = "";
@@ -505,8 +509,6 @@ method BuildWorkList
    &arrRelatedTransfers = CreateArrayRept(0, 0);
    &arrRelatedRemovals = CreateArrayRept(CreateArrayAny(), 0);
    
-   
-   
    &nDisplayRow = 1;
    
    /*First run through all of the worklist items, will make sure each Position item and Each Job 
@@ -615,6 +617,7 @@ method BuildWorkList
    &rsWorkListRows.Sort(CCS_STF_WORK_VW.EMPLID, "D", CCS_STF_WORK_VW.EFFDT, "D", CCS_STF_WORK_VW.CCS_TRANSACT_NBR, "D");
    
    
+   
    For &nDataIndex = 1 To &rsWorkListRows.RowCount
       
       &bDisplayRow = True;
@@ -707,9 +710,16 @@ method BuildWorkList
          End-If;
          
       When "T" /*Transfer an Employee*/
+         
+         /*A transfer row is composed of data from two different actions a removal and a placement*/
+         
+         
          /*Need to find the related removal */
          &nRelatedRemovalIndex = &arrRelatedRemovals.Find(&rBaseData.CCS_TRANSACT_NBR.Value);
+         
+         
          /*The new info is this current row*/
+         /*Put the placement part of the transfer into &rNew_WORK_VW*/
          &rBaseData.CopyFieldsTo(&rNew_WORK_VW);
          
          /*Wipe out the current info this should be filled by a previous removal row*/
@@ -720,14 +730,27 @@ method BuildWorkList
             
             /*The old or current data is the related removal data*/
             &arrRelatedRemovals [&nRelatedRemovalIndex][2].CopyFieldsTo(&rCurrent_WORK_VW);
+            
+            /*Copy the removal part of the transfer into &rBaseData*/
             &rCurrent_WORK_VW.CopyFieldsTo(&rBaseData);
             
             
+            /*set a couple fields from the values associated with the placement part of the transfer*/
             &rBaseData.EFFDT.Value = &rNew_WORK_VW.EFFDT.Value;
             &rBaseData.CCS_CHG_CREATE_DTM.Value = &rNew_WORK_VW.CCS_CHG_CREATE_DTM.Value;
             
             &rBaseData.CCS_REQUEST_TYPE.Value = &rNew_WORK_VW.CCS_REQUEST_TYPE.Value;
-			&rBaseData.CCS_PRNT_COUNT.Value = &rNew_WORK_VW.CCS_PRNT_COUNT.Value;
+            
+            If &rNew_WORK_VW.CCS_PRNT_COUNT.Value > 0 Then
+               
+               &rBaseData.CCS_PRNT_COUNT.Value = &rNew_WORK_VW.CCS_PRNT_COUNT.Value;
+               
+            Else
+               &rNew_WORK_VW.CCS_PRNT_COUNT.Value = &rBaseData.CCS_PRNT_COUNT.Value;
+            End-If;
+            
+            
+            
          End-If;
          &rCurrent_WORK_VW.CCS_REQUEST_TYPE.Value = "T";
          
@@ -764,11 +787,20 @@ method BuildWorkList
          &rTempCCS_DERIVED_WRK.CCS_NEW_FTE.Value = &rNew_WORK_VW.FTE.Value;
          &rTempCCS_DERIVED_WRK.CCS_NEW_FTE.Style = "CCS_STF_APPRVL_NEW";
          &rTempCCS_DERIVED_WRK.CCS_NEW_POS_NBR.Value = &rNew_WORK_VW.POSITION_NBR.Value;
+         &rTempCCS_DERIVED_WRK.CCS_NEW_EFFDT.Value = &rNew_WORK_VW.EFFDT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_NEW_EMPL_RCD.Value = &rNew_WORK_VW.EMPL_RCD.Value;
+         &rTempCCS_DERIVED_WRK.CCS_NEW_POS_ID.Value = &rNew_WORK_VW.CCS_STF_POS_ID.Value;
+         &rTempCCS_DERIVED_WRK.CCS_NEW_HR_AREA.Value = &rNew_WORK_VW.CCS_SCH_HR_AREA.Value;
          
          &rTempCCS_DERIVED_WRK.CCS_CUR_LOCATION.Value = &rCurrent_WORK_VW.LOCATION.Value;
          &rTempCCS_DERIVED_WRK.CCS_CUR_FTE.Value = &rCurrent_WORK_VW.FTE.Value;
          &rTempCCS_DERIVED_WRK.CCS_CUR_FTE.Style = "CCS_STF_APPRVL_OLD";
          &rTempCCS_DERIVED_WRK.CCS_CUR_POS_NBR.Value = &rCurrent_WORK_VW.POSITION_NBR.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CUR_EFFDT.Value = &rCurrent_WORK_VW.EFFDT.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CUR_EMPL_RCD.Value = &rCurrent_WORK_VW.EMPL_RCD.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CUR_POS_ID.Value = &rCurrent_WORK_VW.CCS_STF_POS_ID.Value;
+         &rTempCCS_DERIVED_WRK.CCS_CUR_HR_AREA.Value = &rBaseData.CCS_SCH_HR_AREA.Value;
+         
          /*
          &rTempCCS_DERIVED_WRK.CCS_COMBINED_FTE.Value = &rBaseData.CCS_COMBINED_FTE.Value;
          */
@@ -779,6 +811,9 @@ method BuildWorkList
          &rTempCCS_DERIVED_WRK.BGN_DT.Value = &rBaseData.BGN_DT.Value;
          &rTempCCS_DERIVED_WRK.END_DT.Value = &rBaseData.END_DT.Value;
          &rTempCCS_DERIVED_WRK.CCS_CHG_CREATE_DTM.Value = &rBaseData.CCS_CHG_CREATE_DTM.Value;
+         
+         &rTempCCS_DERIVED_WRK.CCS_CUR_HR_AREA.Value = &rBaseData.CCS_SCH_HR_AREA.Value;
+         
          
          
          /*Add this record to the temp Approvals rowset*/
@@ -794,6 +829,10 @@ method BuildWorkList
    End-For;
    
    &rsDisplayWork.DeleteRow(&nDisplayRow);
+   
+   /*Copy this into the original worklist as a backup*/
+   /*We'll use this backup when running searches so that the entire worklist doesn't have to be re-created each time*/
+   &rsDisplayWork.CopyTo(&rsOriginalDisplayWorkList);
    
    Return &rsDisplayWork;
    
@@ -1640,6 +1679,26 @@ method GetJobData
                   /*Create an inner array that has the emplid in this job, the effdt for this job row, and the filled worklist record with job data*/
                   &arrTempDataInner = CreateArrayAny(&recTempData.EMPLID.Value, &dtStaffingDate, &recTempData);
                   &arrConsolidateJobData.Push(&arrTempDataInner);
+               Else
+                  &recTempData.EMPLID.Value = &aStaffingJobData [&nJobIndex][3].EMPLID.Value;
+                  &recTempData.EMPL_RCD.Value = &aStaffingJobData [&nJobIndex][3].EMPL_RCD.Value;
+                  &recTempData.EMPL_CLASS.Value = &aStaffingJobData [&nJobIndex][3].EMPL_CLASS.Value;
+                  &recTempData.CCS_STA_APPROVAL.Value = "";
+                  &recTempData.CCS_CHANGE_TYPE.Value = "Job";
+                  &dtStaffingDate = &aStaffingJobData [&nJobIndex][3].EFFDT.Value;
+                  
+                  If &aStaffingJobData [&nJobIndex][3].CCS_STF_SURPLUS_PP.Value = "P" Then
+                     &recTempData.CCS_REQUEST_TYPE.Value = "S"; /*Empl has been surplussed from this position*/
+                  End-If;
+                  
+                  If &aStaffingJobData [&nJobIndex][3].EFF_STATUS.Value = "I" Then
+                     &recTempData.CCS_REQUEST_TYPE.Value = "R"; /*Empl has been removed from this position*/
+                  End-If;
+                  
+                  
+                  /*Create an inner array that has the emplid in this job, the effdt for this job row, and the filled worklist record with job data*/
+                  &arrTempDataInner = CreateArrayAny(&recTempData.EMPLID.Value, &dtStaffingDate, &recTempData);
+                  &arrConsolidateJobData.Push(&arrTempDataInner);
                End-If;
             End-If;
             &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
@@ -1744,11 +1803,15 @@ method GetJobData
       /*Go through the Consolidate array and strip out the extra info and just return the relevant stored job records*/
       &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
       For &nConsolidatedIndex = 1 To &arrConsolidateJobData.Len
-         
-         &arrConsolidateJobData [&nConsolidatedIndex][3].CopyFieldsto(&recTempData);
-         &arrRecData.Unshift(&recTempData);
-         
-         &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+         /*See if the person has been removed or surplussed from the occupy*/
+         /*IF they have been don't include it*/
+         If &arrConsolidateJobData [&nConsolidatedIndex][3].CCS_REQUEST_TYPE.Value <> "S" And
+               &arrConsolidateJobData [&nConsolidatedIndex][3].CCS_REQUEST_TYPE.Value <> "R" Then
+            &arrConsolidateJobData [&nConsolidatedIndex][3].CopyFieldsto(&recTempData);
+            &arrRecData.Unshift(&recTempData);
+            
+            &recTempData = CreateRecord(Record.CCS_STF_WORK_VW);
+         End-If;
       End-For;
    End-If;
 end-method;
@@ -2220,5 +2283,60 @@ method getEmplCombinedFTE
    
    Return &nFteSum;
    
+end-method;
+
+
+method Search
+   /+ &sHrStaffArea as String, +/
+   /+ &sLoc as String, +/
+   /+ &sEmplid as String +/
+   /+ Returns Rowset +/
+   
+   Local Rowset &rsSearchResults;
+   
+   Local number &nI;
+   Local number &nDisplayRow;
+   
+   Local boolean &bIsSearchResult;
+   
+   &rsSearchResults = CreateRowset(&rsOriginalDisplayWorkList);
+   
+   &nDisplayRow = 1;
+   
+   For &nI = 1 To &rsOriginalDisplayWorkList.RowCount
+      
+      &bIsSearchResult = True;
+      
+      If &sEmplid <> "" And
+            &rsOriginalDisplayWorkList(&nI).CCS_DERIVED_WRK.EMPLID.Value <> &sEmplid Then
+         &bIsSearchResult = False;
+      End-If;
+      
+      If &sHrStaffArea <> "" And
+            (&rsOriginalDisplayWorkList(&nI).CCS_DERIVED_WRK.CCS_NEW_HR_AREA.Value <> &sHrStaffArea And
+               &rsOriginalDisplayWorkList(&nI).CCS_DERIVED_WRK.CCS_CUR_HR_AREA.Value <> &sHrStaffArea) Then
+         &bIsSearchResult = False;
+      End-If;
+      
+      If &sLoc <> "" And
+            (&rsOriginalDisplayWorkList(&nI).CCS_DERIVED_WRK.CCS_NEW_LOCATION.Value <> &sLoc And
+               &rsOriginalDisplayWorkList(&nI).CCS_DERIVED_WRK.CCS_CUR_LOCATION.Value <> &sLoc) Then
+         &bIsSearchResult = False;
+      End-If;
+      
+      
+      If &bIsSearchResult = True Then
+         &rsOriginalDisplayWorkList(&nI).CCS_DERIVED_WRK.CopyFieldsTo(&rsSearchResults(&nDisplayRow).CCS_DERIVED_WRK);
+         
+         &rsSearchResults.InsertRow(&nDisplayRow);
+         &nDisplayRow = &nDisplayRow + 1;
+         
+      End-If;
+      
+   End-For;
+   
+   &rsSearchResults.DeleteRow(&nDisplayRow);
+   
+   Return &rsSearchResults;
 end-method;
 
